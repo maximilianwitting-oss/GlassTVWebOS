@@ -211,7 +211,7 @@ main::-webkit-scrollbar { width: 0; }
  */
 .card .label {
   padding: 11px 14px 0; font-size: 20px; line-height: 26px;
-  word-wrap: break-word;   /* Titel wie NETFLIX_KIDS_4K_3840P sind ein Token */
+  word-wrap: break-word;   /* Titel wie SERIE_4K_3840P_DOLBY sind ein Token */
   height: 63px; max-height: 63px; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
@@ -256,8 +256,9 @@ main::-webkit-scrollbar { width: 0; }
 
 .channel .info { -webkit-flex: 1; flex: 1; min-width: 0; overflow: hidden; }
 .channel .name { font-size: 24px; font-weight: 600;
-  /* Wie .channel .sub: Namen wie „NETFLIX KIDS ⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ" brachen
-     sonst auf zwei bis drei Zeilen um – die Liste bekam ungleich hohe Zeilen. */
+  /* Wie .channel .sub: Lange Namen mit Zusaetzen („… ⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ")
+     brachen sonst auf zwei bis drei Zeilen um – die Liste bekam ungleich
+     hohe Zeilen. */
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .channel .sub {
