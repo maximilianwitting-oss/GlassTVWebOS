@@ -1,0 +1,14 @@
+{
+  "id": "de.app.glasstv",
+  "version": "1.0.0",
+  "vendor": "Maximilian Witting",
+  "type": "web",
+  "main": "index.html",
+  "title": "GlassTV",
+  "icon": "icon.png",
+  "largeIcon": "icon-large.png",
+  "bgColor": "#0f0d1f",
+  "iconColor": "#8C80F7",
+  "disableBackHistoryAPI": true,
+  "supportPortraitMode": false
+}

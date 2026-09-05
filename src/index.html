@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, initial-scale=1">
+  <title>GlassTV</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="backdrop"></div>
+
+  <div id="app">
+    <header>
+      <h1>GlassTV</h1>
+      <nav id="tabs"></nav>
+      <span class="spacer"></span>
+      <button id="btn-settings" class="tab focusable">Einstellungen</button>
+    </header>
+    <main id="content"></main>
+  </div>
+
+  <div id="player">
+    <video id="video" preload="none"></video>
+    <div id="player-chrome">
+      <div>
+        <div id="player-title"></div>
+        <div id="player-sub"></div>
+      </div>
+      <div id="player-bar">
+        <span id="player-hint">OK = Pause · ◀ ▶ = 10 s · Zurück = schließen</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

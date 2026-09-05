@@ -1,0 +1,222 @@
+/*
+ * GlassTV für webOS – 10-Fuß-Oberfläche.
+ *
+ * Maße sind bewusst großzügig: gelesen wird aus 2–3 m Entfernung, bedient mit
+ * der Fernbedienung. Das Design übernimmt Grundfarbe und Akzent der iOS-/
+ * Quest-App („Perl" wäre auf dem TV zu hell – hier trägt „Mitternacht").
+ */
+
+:root {
+  --bg: #0b0a17;
+  --surface: rgba(255, 255, 255, 0.06);
+  --surface-strong: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.12);
+  --text: #eae7f2;
+  --text-dim: #a9a4bd;
+  --accent: #8c80f7;
+  --accent-dim: rgba(140, 128, 247, 0.22);
+  --live: #ff4d4d;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "LG Smart UI", "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  /* Fernseher überzeichnen den Rand; ohne Sicherheitsabstand wird beschnitten. */
+  font-size: 20px;
+}
+
+/* Design-Hintergrund: Grundfarbe + zwei weiche Akzent-Glows wie in der App. */
+#backdrop {
+  position: fixed; inset: 0; z-index: 0;
+  background:
+    radial-gradient(60% 60% at 0% 0%, rgba(140, 128, 247, 0.22), transparent 70%),
+    radial-gradient(60% 60% at 100% 100%, rgba(38, 77, 230, 0.16), transparent 70%),
+    var(--bg);
+}
+
+#app { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; }
+
+/* ---------------------------------------------------------------- Kopf ---- */
+
+header {
+  display: flex; align-items: center; gap: 24px;
+  padding: 28px 48px 12px;
+}
+
+header h1 { font-size: 34px; font-weight: 800; letter-spacing: 0.5px; }
+header .spacer { flex: 1; }
+
+nav { display: flex; gap: 12px; }
+
+.tab {
+  padding: 10px 22px; border-radius: 999px;
+  background: var(--surface); border: 1px solid transparent;
+  color: var(--text-dim); font-size: 20px; cursor: pointer;
+}
+
+.tab.active { background: var(--accent-dim); color: var(--text); font-weight: 600; }
+
+/* Fokus ist auf dem TV die einzige Ortsangabe – er muss knallen. */
+.focusable:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent), 0 8px 30px rgba(0, 0, 0, 0.55);
+  transform: scale(1.04);
+  z-index: 5;
+}
+
+.tab.focusable:focus { transform: scale(1.06); }
+
+/* ---------------------------------------------------------- Inhalte ---- */
+
+main { flex: 1; overflow-y: auto; padding: 8px 48px 48px; }
+main::-webkit-scrollbar { width: 0; }
+
+.section-title {
+  font-size: 24px; font-weight: 700; margin: 22px 0 12px;
+  display: flex; align-items: center; gap: 12px;
+}
+.section-title::before {
+  content: ''; width: 5px; height: 24px; border-radius: 3px; background: var(--accent);
+}
+
+.row { display: flex; gap: 18px; overflow-x: auto; padding: 6px 4px 18px; }
+.row::-webkit-scrollbar { height: 0; }
+
+.grid {
+  display: grid; gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  padding: 6px 4px 24px;
+}
+
+.card {
+  flex: 0 0 auto; width: 200px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; overflow: hidden; cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.card .poster {
+  width: 100%; aspect-ratio: 2 / 3; background: var(--surface-strong);
+  display: block; object-fit: cover;
+}
+
+.card .label {
+  padding: 10px 12px; font-size: 17px; line-height: 1.25;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Senderzeile */
+.channel {
+  display: flex; align-items: center; gap: 18px;
+  padding: 14px 18px; margin-bottom: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.channel.on-air { background: var(--accent-dim); }
+
+.channel .logo {
+  width: 64px; height: 64px; flex: 0 0 auto; border-radius: 10px;
+  background: var(--surface-strong); object-fit: contain; padding: 6px;
+}
+
+.channel .info { flex: 1; min-width: 0; }
+.channel .name { font-size: 21px; font-weight: 600; }
+.channel .sub {
+  font-size: 16px; color: var(--text-dim); margin-top: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.progress { height: 4px; background: rgba(255, 255, 255, 0.15); border-radius: 2px; margin-top: 8px; }
+.progress > div { height: 100%; background: var(--accent); border-radius: 2px; }
+
+.badge-live {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(0, 0, 0, 0.5); border-radius: 999px;
+  padding: 3px 10px; font-size: 14px; font-weight: 700;
+}
+.badge-live::before {
+  content: ''; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--live); box-shadow: 0 0 8px var(--live);
+}
+
+/* -------------------------------------------------------------- Formular ---- */
+
+.panel {
+  max-width: 720px; margin: 40px auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; padding: 32px;
+}
+
+.panel h2 { font-size: 28px; margin-bottom: 8px; }
+.panel p { color: var(--text-dim); margin-bottom: 22px; line-height: 1.45; }
+
+label { display: block; font-size: 16px; color: var(--text-dim); margin: 14px 0 6px; }
+
+input {
+  width: 100%; padding: 14px 16px; font-size: 20px;
+  background: rgba(0, 0, 0, 0.35); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px;
+}
+
+button {
+  padding: 14px 26px; font-size: 20px; font-weight: 600;
+  background: var(--accent); color: #12101f;
+  border: 1px solid transparent; border-radius: 12px; cursor: pointer;
+}
+
+button.ghost { background: var(--surface); color: var(--text); border-color: var(--border); }
+
+.actions { display: flex; gap: 14px; margin-top: 24px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- Player ---- */
+
+#player {
+  position: fixed; inset: 0; z-index: 50; background: #000;
+  display: none;
+}
+#player.open { display: block; }
+#player video { width: 100%; height: 100%; background: #000; }
+
+#player-chrome {
+  position: absolute; inset: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent 30%, transparent 70%, rgba(0, 0, 0, 0.7));
+  opacity: 1; transition: opacity 250ms ease;
+  display: flex; flex-direction: column; justify-content: space-between;
+  padding: 40px 56px;
+}
+#player-chrome.hidden { opacity: 0; pointer-events: none; }
+
+#player-title { font-size: 30px; font-weight: 700; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8); }
+#player-sub { font-size: 19px; color: var(--text-dim); margin-top: 6px; }
+
+#player-bar { display: flex; align-items: center; gap: 20px; }
+#player-hint { font-size: 17px; color: var(--text-dim); }
+
+/* ---------------------------------------------------------------- Status ---- */
+
+#toast {
+  position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85); border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px 24px; font-size: 19px;
+  z-index: 80; display: none; max-width: 80%;
+}
+#toast.show { display: block; }
+
+.empty { text-align: center; padding: 80px 20px; color: var(--text-dim); font-size: 21px; }
+.empty strong { display: block; color: var(--text); font-size: 26px; margin-bottom: 10px; }
+
+.spinner {
+  width: 46px; height: 46px; margin: 60px auto;
+  border: 4px solid var(--surface-strong); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 900ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
