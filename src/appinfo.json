@@ -1,14 +1,19 @@
 {
   "id": "de.app.glasstv",
-  "version": "1.6.0",
+  "version": "1.9.1",
   "vendor": "Maximilian Witting",
   "type": "web",
   "main": "index.html",
   "title": "GlassTV",
   "icon": "icon.png",
   "largeIcon": "icon-large.png",
-  "bgColor": "#0f0d1f",
+  "bgColor": "#f0f0f5",
   "iconColor": "#8C80F7",
   "disableBackHistoryAPI": true,
-  "supportPortraitMode": false
+  "supportPortraitMode": false,
+  "appDescription": "Spielt deine eigenen IPTV-Playlisten ab – Xtream Codes oder M3U.",
+  "resolution": "1920x1080",
+  "requiredMemory": 512,
+  "handlesRelaunch": true,
+  "vendorUrl": "https://witting.info"
 }

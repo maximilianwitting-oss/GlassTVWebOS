@@ -32,7 +32,7 @@
     activeProfile: 'default',
     gate: false,         // „Wer schaut?" wird gerade gezeigt
     settings: {
-      languages: [], strict: true, design: 'midnight', accent: 'violet', sort: 'standard',
+      languages: [], strict: true, design: 'perl', accent: 'violet', sort: 'standard',
       pin: null, lockedGroups: [], hiddenGroups: [],
     },
     unlocked: false,     // Kindersicherung für diese Sitzung entsperrt
@@ -49,8 +49,22 @@
 
   // ------------------------------------------------------- Persistenz ----
 
+  var storageWarned = false;
+
+  /**
+   * Schreiben in den Gerätespeicher. Ein voller Speicher blieb früher stumm:
+   * Der PIN wirkte gesetzt, war nach dem Neustart aber weg – ohne jeden Hinweis.
+   */
   function save(key, value) {
-    try { localStorage.setItem('glasstv.' + key, JSON.stringify(value)); } catch (e) { /* Speicher voll */ }
+    try {
+      localStorage.setItem('glasstv.' + key, JSON.stringify(value));
+    } catch (e) {
+      if (!storageWarned && el.toast) {
+        storageWarned = true;
+        toast('Der Speicher des Fernsehers ist voll – Einstellungen und Verlauf ' +
+          'lassen sich gerade nicht sichern.', 9000);
+      }
+    }
   }
 
   function load(key, fallback) {
@@ -99,12 +113,22 @@
     } catch (e) { finish(e, null); }
   }
 
-  function httpGetJson(url, cb) {
+  function httpGetJson(url, cb, timeoutMs) {
     httpGet(url, function (err, text) {
       if (err) return cb(err, null);
       try { cb(null, JSON.parse(text)); } catch (e) { cb(new Error('Ungültige Antwort'), null); }
-    });
+    }, timeoutMs);
   }
+
+  /**
+   * Zeitlimit für Katalog-Abrufe.
+   *
+   * Die Filmliste eines großen Panels ist zweistellige Megabyte groß – mit den
+   * voreingestellten 25 s lief sie auf echten Anschlüssen in den Timeout, und
+   * weil ein Fehler dort früher stumm blieb, landete man mit „0 Filme" in der
+   * App, ohne zu erfahren warum.
+   */
+  var CATALOG_TIMEOUT = 180000;
 
   // ---------------------------------------------------------- Fokus ----
 
@@ -121,7 +145,7 @@
       if (el.content.contains(focusables[i])) inContent.push(focusables[i]);
     }
     var target = inContent.length ? inContent[0] : focusables[0];
-    if (target) target.focus();
+    if (target) { target.focus(); revealFocus(target); }
   }
 
   /**
@@ -142,12 +166,66 @@
     focusFirst();
   }
 
+  /** Nächster scrollbarer Vorfahr in einer Achse (oder null). */
+  function scrollParent(node, horizontal) {
+    var n = node.parentNode;
+    while (n && n !== document.body) {
+      if (n.scrollWidth !== undefined) {
+        if (horizontal && n.scrollWidth > n.clientWidth + 4) return n;
+        if (!horizontal && n.scrollHeight > n.clientHeight + 4) return n;
+      }
+      n = n.parentNode;
+    }
+    return null;
+  }
+
+  /**
+   * Element in den Blick holen.
+   *
+   * `scrollIntoView` mit Options-Objekt gibt es erst ab Chrome 61 – auf dem
+   * Fernseher (53) wird das Objekt ignoriert und die Seite springt an den
+   * Rand. Deshalb wird hier von Hand nur so weit gescrollt, wie nötig: die
+   * Chip-Reihe waagerecht, die Seite senkrecht.
+   */
+  function revealFocus(node) {
+    var box = node.getBoundingClientRect();
+
+    var row = scrollParent(node, true);
+    if (row) {
+      var rb = row.getBoundingClientRect();
+      if (box.left < rb.left + 24) row.scrollLeft -= (rb.left + 24 - box.left);
+      else if (box.right > rb.right - 24) row.scrollLeft += (box.right - rb.right + 24);
+    }
+
+    var col = scrollParent(node, false) || el.content;
+    if (col) {
+      var cb = col.getBoundingClientRect();
+      box = node.getBoundingClientRect();
+      // Großzügiger Rand: Auf dem Fernseher soll das fokussierte Element nie
+      // an der Kante kleben, sonst sieht man den Kontext nicht mehr.
+      if (box.top < cb.top + 90) col.scrollTop -= (cb.top + 90 - box.top);
+      else if (box.bottom > cb.bottom - 90) col.scrollTop += (box.bottom - cb.bottom + 90);
+    }
+  }
+
+  /**
+   * Fokus geometrisch weiterschalten.
+   *
+   * Zwei Eigenheiten, die auf dem Gerät auffielen:
+   *  - Beim Sprung in eine waagerecht scrollbare Chip-Reihe landete der Fokus
+   *    irgendwo in deren Mitte (das geometrisch nächste Element war zufällig
+   *    ein weit rechts liegender Chip). Jetzt wird beim Wechsel der Reihe
+   *    bevorzugt deren erster SICHTBARER Eintrag genommen.
+   *  - Am Seitenende bewegte sich gar nichts mehr, ohne dass klar war warum.
+   *    Jetzt wird in so einem Fall wenigstens weitergescrollt.
+   */
   function moveFocus(dx, dy) {
     collectFocusables();
     var active = document.activeElement;
     if (!active || focusables.indexOf(active) < 0) { focusFirst(); return; }
     var from = active.getBoundingClientRect();
     var best = null, bestScore = Infinity;
+    var activeRow = scrollParent(active, true);
 
     for (var i = 0; i < focusables.length; i++) {
       var node = focusables[i];
@@ -160,19 +238,43 @@
       if (dx < 0 && ddx >= -8) continue;
       if (dy > 0 && ddy <= 8) continue;
       if (dy < 0 && ddy >= -8) continue;
-      // Abstand in Richtung zählt voll, seitlicher Versatz dreifach.
+
       var along = Math.abs(dx ? ddx : ddy);
       var across = Math.abs(dx ? ddy : ddx);
       var score = along + across * 3;
+
+      // Senkrechter Wechsel in eine andere waagerechte Reihe: Der seitliche
+      // Versatz darf dann fast nichts kosten, sonst gewinnt ein zufällig
+      // günstig stehender Chip weit außen.
+      if (dy !== 0) {
+        var row = scrollParent(node, true);
+        if (row && row !== activeRow) score = along + across * 0.15;
+      }
       if (score < bestScore) { bestScore = score; best = node; }
     }
+
     if (best) {
-      best.focus();
-      if (best.scrollIntoView) {
-        try { best.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
-        catch (e) { best.scrollIntoView(false); }   // Chromium 53 kennt die Optionen nicht
+      /*
+       * Beim senkrechten Wechsel in eine waagerecht scrollbare Reihe an deren
+       * ANFANG einsteigen, nicht an der zufällig getroffenen Stelle: Die Reihe
+       * ist breiter als der Schirm, und man sieht nicht, was links davon liegt –
+       * es wirkte, als übersprünge die Navigation Einträge.
+       */
+      if (dy !== 0) {
+        var zielReihe = scrollParent(best, true);
+        if (zielReihe && zielReihe !== activeRow) {
+          var erste = zielReihe.querySelector('.focusable');
+          if (erste) best = erste;
+        }
       }
+      best.focus();
+      revealFocus(best);
+      return;
     }
+    // Nichts gefunden: wenigstens die Seite bewegen, damit die Taste nicht
+    // wirkungslos wirkt.
+    var col = scrollParent(active, false) || el.content;
+    if (col && dy !== 0) col.scrollTop += dy * 160;
   }
 
   // ---------------------------------------------------------- Bausteine ----
@@ -185,6 +287,42 @@
   }
 
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+  /**
+   * Fokus über einen Neuaufbau hinweg halten.
+   *
+   * `render()` verwirft den gesamten Inhalt; ohne Merker landet der Fokus
+   * danach wieder auf dem ersten Element. In den Einstellungen hieß das: Nach
+   * jedem Klick auf ein Design sprang man an den Seitenanfang und musste sich
+   * erneut hinunterhangeln – es wirkte, als ließe sich nichts umstellen.
+   *
+   * Der Schlüssel ist bewusst inhaltlich (Kennung des Elements), nicht der
+   * Index: Nach dem Aufbau kann die Liste anders lang sein.
+   */
+  var pendingFocusKey = null;
+
+  function rememberFocus() {
+    var a = document.activeElement;
+    pendingFocusKey = (a && a.getAttribute) ? a.getAttribute('data-fkey') : null;
+  }
+
+  function restoreFocus() {
+    if (!pendingFocusKey) return false;
+    var key = pendingFocusKey;
+    pendingFocusKey = null;
+    // Kein `querySelector`: Kategorienamen dürfen Anführungszeichen enthalten
+    // („VOD "Neu""), was einen ungültigen Selektor ergäbe – die Ausnahme hätte
+    // den Fokus danach ganz verschwinden lassen. CSS.escape gibt es hier nicht.
+    var nodes = document.querySelectorAll('[data-fkey]');
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].getAttribute('data-fkey') === key) {
+        nodes[i].focus();
+        revealFocus(nodes[i]);
+        return true;
+      }
+    }
+    return false;
+  }
 
   function element(tag, className, text) {
     var n = document.createElement(tag);
@@ -232,6 +370,8 @@
 
   function button(label, onClick, ghost) {
     var b = element('button', 'focusable' + (ghost ? ' ghost' : ''), label);
+    // Beschriftungen sind je Seite eindeutig – als Merker für den Fokus genug.
+    b.setAttribute('data-fkey', 'btn:' + label);
     b.onclick = onClick;
     return b;
   }
@@ -264,12 +404,24 @@
     });
   }
 
-  function groupsOf(items, nameKey) {
+  /**
+   * Kategorien einer Liste – gepuffert.
+   *
+   * Ein voller Durchlauf über 142.000 Filme, nur um 40 Chips zu zeichnen, lief
+   * vorher bei JEDEM Aufbau erneut (und jeder Chip-Klick baut neu auf).
+   */
+  var groupCache = {};
+
+  function groupsOf(items, cacheKey) {
+    if (cacheKey && groupCache[cacheKey] && groupCache[cacheKey].len === items.length) {
+      return groupCache[cacheKey].list;
+    }
     var seen = {}, out = [];
     for (var i = 0; i < items.length; i++) {
       var g = items[i].group;
       if (g && !seen[g]) { seen[g] = true; out.push(g); }
     }
+    if (cacheKey) groupCache[cacheKey] = { len: items.length, list: out };
     return out;
   }
 
@@ -278,6 +430,16 @@
   }
 
   function isFavorite(id) { return !!state.favorites[id]; }
+
+  /** Einträge einer Liste, deren Kennung in `map` steht – ein Durchlauf. */
+  function pickByIds(list, map) {
+    var out = [];
+    var any = false;
+    for (var k in map) { if (Object.prototype.hasOwnProperty.call(map, k)) { any = true; break; } }
+    if (!any) return out;
+    for (var i = 0; i < list.length; i++) if (map[list[i].id]) out.push(list[i]);
+    return out;
+  }
 
   function onWatchlist(id) { return !!state.watchlist[id]; }
 
@@ -297,23 +459,33 @@
   // --------------------------------------------------------- Designs ----
 
   /**
-   * Designs aus der iOS-App, auf die dunklen beschränkt: Ein heller
-   * Hintergrund blendet im abgedunkelten Wohnzimmer und ist auf OLED zudem
-   * der einzige Fall, in dem der Fernseher nennenswert Strom zieht.
+   * Designs aus der iOS-App – hell UND dunkel, wie dort. Jedes Design bringt
+   * seine eigenen Flächen- und Textfarben mit: Ohne die bliebe bei einem hellen
+   * Grund die dunkle Kartenfläche stehen und die Schrift wäre unlesbar.
+   *
+   * `dark: false` schaltet das ganze Farbschema um (Flächen, Ränder, Text).
    */
   var DESIGNS = [
-    { id: 'midnight', name: 'Mitternacht', bg: '#0b0a17', g1: 'rgba(140,128,247,0.22)', g2: 'rgba(38,77,230,0.16)' },
-    { id: 'oled', name: 'Pur Schwarz', bg: '#000000', g1: 'rgba(140,128,247,0.10)', g2: 'rgba(0,0,0,0)' },
-    { id: 'graphite', name: 'Graphit', bg: '#131316', g1: 'rgba(255,255,255,0.05)', g2: 'rgba(140,128,247,0.12)' },
-    { id: 'aurora', name: 'Aurora', bg: '#050a17', g1: 'rgba(0,184,166,0.22)', g2: 'rgba(217,64,153,0.18)' },
-    { id: 'nebula', name: 'Galaxie', bg: '#0d0519', g1: 'rgba(140,51,217,0.30)', g2: 'rgba(230,64,153,0.22)' },
-    { id: 'ocean', name: 'Ozean', bg: '#040d1a', g1: 'rgba(0,115,217,0.24)', g2: 'rgba(0,191,184,0.18)' },
-    { id: 'forest', name: 'Wald', bg: '#06100a', g1: 'rgba(31,153,89,0.20)', g2: 'rgba(128,179,51,0.12)' },
-    { id: 'sunset', name: 'Sonnenuntergang', bg: '#170910', g1: 'rgba(255,107,51,0.26)', g2: 'rgba(217,51,102,0.20)' },
-    { id: 'crimson', name: 'Purpur', bg: '#170508', g1: 'rgba(217,31,51,0.28)', g2: 'rgba(128,13,38,0.24)' },
-    { id: 'mocha', name: 'Mokka', bg: '#140f0d', g1: 'rgba(140,97,61,0.24)', g2: 'rgba(102,66,46,0.20)' },
-    { id: 'champagner', name: 'Champagner', bg: '#161310', g1: 'rgba(219,184,107,0.24)', g2: 'rgba(184,140,77,0.18)' },
-    { id: 'kupfer', name: 'Kupfer', bg: '#170e0a', g1: 'rgba(209,115,61,0.26)', g2: 'rgba(153,77,41,0.20)' },
+    // ---- hell (Standard wie in der iOS-App: „Perl") ----
+    { id: 'perl', name: 'Perl', dark: false, bg: '#f0f0f5', g1: 'rgba(219,222,235,0.85)', g2: 'rgba(230,225,220,0.7)' },
+    { id: 'daylight', name: 'Hell', dark: false, bg: '#f2f2f7', g1: 'rgba(255,255,255,0.9)', g2: 'rgba(226,230,240,0.8)' },
+    { id: 'sand', name: 'Sand', dark: false, bg: '#f5f0e6', g1: 'rgba(242,204,140,0.55)', g2: 'rgba(235,222,200,0.7)' },
+    { id: 'jade', name: 'Jade', dark: false, bg: '#e8f4ee', g1: 'rgba(89,204,158,0.45)', g2: 'rgba(140,217,204,0.45)' },
+    { id: 'arktis', name: 'Arktis', dark: false, bg: '#e8f1fb', g1: 'rgba(140,191,255,0.45)', g2: 'rgba(184,224,255,0.5)' },
+    { id: 'sakura', name: 'Sakura', dark: false, bg: '#fbeef2', g1: 'rgba(255,179,209,0.5)', g2: 'rgba(242,199,230,0.5)' },
+    // ---- dunkel ----
+    { id: 'midnight', name: 'Mitternacht', dark: true, bg: '#0b0a17', g1: 'rgba(140,128,247,0.22)', g2: 'rgba(38,77,230,0.16)' },
+    { id: 'oled', name: 'Pur Schwarz', dark: true, bg: '#000000', g1: 'rgba(140,128,247,0.10)', g2: 'rgba(0,0,0,0)' },
+    { id: 'graphite', name: 'Graphit', dark: true, bg: '#131316', g1: 'rgba(255,255,255,0.05)', g2: 'rgba(140,128,247,0.12)' },
+    { id: 'aurora', name: 'Aurora', dark: true, bg: '#050a17', g1: 'rgba(0,184,166,0.22)', g2: 'rgba(217,64,153,0.18)' },
+    { id: 'nebula', name: 'Galaxie', dark: true, bg: '#0d0519', g1: 'rgba(140,51,217,0.30)', g2: 'rgba(230,64,153,0.22)' },
+    { id: 'ocean', name: 'Ozean', dark: true, bg: '#040d1a', g1: 'rgba(0,115,217,0.24)', g2: 'rgba(0,191,184,0.18)' },
+    { id: 'forest', name: 'Wald', dark: true, bg: '#06100a', g1: 'rgba(31,153,89,0.20)', g2: 'rgba(128,179,51,0.12)' },
+    { id: 'sunset', name: 'Sonnenuntergang', dark: true, bg: '#170910', g1: 'rgba(255,107,51,0.26)', g2: 'rgba(217,51,102,0.20)' },
+    { id: 'crimson', name: 'Purpur', dark: true, bg: '#170508', g1: 'rgba(217,31,51,0.28)', g2: 'rgba(128,13,38,0.24)' },
+    { id: 'mocha', name: 'Mokka', dark: true, bg: '#140f0d', g1: 'rgba(140,97,61,0.24)', g2: 'rgba(102,66,46,0.20)' },
+    { id: 'champagner', name: 'Champagner', dark: true, bg: '#161310', g1: 'rgba(219,184,107,0.24)', g2: 'rgba(184,140,77,0.18)' },
+    { id: 'kupfer', name: 'Kupfer', dark: true, bg: '#170e0a', g1: 'rgba(209,115,61,0.26)', g2: 'rgba(153,77,41,0.20)' },
   ];
 
   var ACCENTS = [
@@ -336,7 +508,7 @@
 
   function designById(id) {
     for (var i = 0; i < DESIGNS.length; i++) if (DESIGNS[i].id === id) return DESIGNS[i];
-    return DESIGNS[0];
+    return DESIGNS[0];   // Perl – der iOS-Standard
   }
 
   function accentById(id) {
@@ -344,20 +516,70 @@
     return ACCENTS[0];
   }
 
-  /** Design + Akzent auf die Seite anwenden (CSS-Variablen, Chromium 49+). */
+  /**
+   * Design + Akzent anwenden (CSS-Variablen, ab Chromium 49 verfügbar).
+   *
+   * Es reicht NICHT, nur Grundfarbe und Akzent zu tauschen: Bei einem hellen
+   * Design müssen Flächen, Ränder und Textfarben mitwandern, sonst steht eine
+   * dunkle Karte mit hellem Text auf hellem Grund.
+   */
   function applyTheme() {
     var d = designById(state.settings.design);
     var a = accentById(state.settings.accent);
     var root = document.documentElement;
-    if (root.style.setProperty) {
-      root.style.setProperty('--bg', d.bg);
-      root.style.setProperty('--accent', a.color);
-      root.style.setProperty('--accent-dim', hexToRgba(a.color, 0.22));
+    if (!root.style.setProperty) return;
+
+    var accent = d.dark ? a.color : darken(a.color, 0.55);
+
+    root.style.setProperty('--bg', d.bg);
+    root.style.setProperty('--accent', accent);
+    root.style.setProperty('--accent-dim', hexToRgba(accent, d.dark ? 0.22 : 0.16));
+    if (d.dark) {
+      root.style.setProperty('--surface', 'rgba(255,255,255,0.06)');
+      root.style.setProperty('--surface-strong', 'rgba(255,255,255,0.12)');
+      root.style.setProperty('--border', 'rgba(255,255,255,0.12)');
+      root.style.setProperty('--text', '#eae7f2');
+      root.style.setProperty('--text-dim', '#a9a4bd');
+      root.style.setProperty('--on-accent', '#12101f');
+    } else {
+      // Auf hellem Grund tragen weiße Schleier nicht – es braucht dunkle.
+      root.style.setProperty('--surface', 'rgba(0,0,0,0.045)');
+      root.style.setProperty('--surface-strong', 'rgba(0,0,0,0.10)');
+      root.style.setProperty('--border', 'rgba(0,0,0,0.14)');
+      root.style.setProperty('--text', '#1b1926');
+      root.style.setProperty('--text-dim', '#5a5670');
+      root.style.setProperty('--on-accent', '#ffffff');
     }
+
     document.getElementById('backdrop').style.background =
-      'radial-gradient(60% 60% at 0% 0%, ' + hexToRgba(a.color, 0.20) + ', transparent 70%),' +
+      'radial-gradient(60% 60% at 0% 0%, ' + d.g1 + ', transparent 70%),' +
       'radial-gradient(60% 60% at 100% 100%, ' + d.g2 + ', transparent 70%),' + d.bg;
+    // `html` malt die Canvas – ohne das bliebe der Rand in der alten Farbe.
+    document.documentElement.style.background = d.bg;
     document.body.style.background = d.bg;
+    document.body.style.color = d.dark ? '#eae7f2' : '#1b1926';
+
+    // Der Backdrop-Verlauf auf Detailseiten muss in den aktuellen Grundton
+    // laufen, sonst steht dort ein Balken in der Farbe eines anderen Designs.
+    var rgb = hexToRgba(d.bg, 1).replace('rgba(', '').replace(')', '').split(',');
+    var base = rgb[0] + ',' + rgb[1] + ',' + rgb[2];
+    var scrims = document.querySelectorAll('.detail-backdrop .scrim');
+    for (var i = 0; i < scrims.length; i++) {
+      scrims[i].style.background =
+        'linear-gradient(to bottom, rgba(' + base + ',0) 30%, rgba(' + base + ',0.95) 100%)';
+    }
+  }
+
+  /** Farbe abdunkeln – helle Akzente sind auf hellem Grund sonst unlesbar. */
+  function darken(hex, factor) {
+    var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return hex;
+    function part(h) {
+      var v = Math.round(parseInt(h, 16) * factor);
+      var s = Math.max(0, Math.min(255, v)).toString(16);
+      return s.length < 2 ? '0' + s : s;
+    }
+    return '#' + part(m[1]) + part(m[2]) + part(m[3]);
   }
 
   function hexToRgba(hex, alpha) {
@@ -382,18 +604,37 @@
 
   // ---------------------------------------------------- Sortierung ----
 
-  function sortItems(list, titleKey) {
+  var sortCache = {};
+
+  /**
+   * Sortieren – gepuffert und ohne `localeCompare`.
+   *
+   * `localeCompare` ist auf dem Fernseher um Größenordnungen teurer als ein
+   * einfacher Vergleich; bei 142.000 Titeln sind das Millionen Aufrufe, nur um
+   * danach 150 Kacheln zu zeigen. Der Sortierschlüssel wird deshalb einmal je
+   * Titel gebildet und am Objekt gemerkt.
+   */
+  function sortItems(list, titleKey, cacheKey) {
     var sort = state.settings.sort;
     if (!sort || sort === 'standard') return list;
+    var key = (cacheKey || '') + '|' + sort + '|' + list.length;
+    if (sortCache[key]) return sortCache[key];
+
     var copy = list.slice();
     if (sort === 'name') {
-      copy.sort(function (a, b) { return (a[titleKey] || '').localeCompare(b[titleKey] || ''); });
+      for (var i = 0; i < copy.length; i++) {
+        if (copy[i]._sortName === undefined) copy[i]._sortName = (copy[i][titleKey] || '').toLowerCase();
+      }
+      copy.sort(function (a, b) {
+        return a._sortName < b._sortName ? -1 : (a._sortName > b._sortName ? 1 : 0);
+      });
     } else if (sort === 'year') {
-      // Titel ohne Jahr ans Ende statt nach vorn spülen.
+      // Titel ohne Jahr/Bewertung ans Ende statt nach vorn spülen.
       copy.sort(function (a, b) { return (parseInt(b.year, 10) || -1) - (parseInt(a.year, 10) || -1); });
     } else if (sort === 'rating') {
       copy.sort(function (a, b) { return (Number(b.rating) || -1) - (Number(a.rating) || -1); });
     }
+    sortCache[key] = copy;
     return copy;
   }
 
@@ -458,9 +699,28 @@
 
   var PROFILE_COLORS = ['#8c80f7', '#3359d9', '#e0567b', '#2c9c88', '#e9a23b', '#7e57c2'];
 
+  /**
+   * Profile laden und dabei aufräumen.
+   *
+   * Ein Eintrag ohne Namen ließ `renderGate()` mitten in der Schleife
+   * abbrechen – der Profilschirm blockiert aber alles andere, und die
+   * Zurück-Taste half nicht. Die App war damit ohne Neuinstallation nicht
+   * mehr bedienbar. Deshalb wird hier jeder Eintrag geprüft statt vertraut.
+   */
   function loadProfiles() {
-    var list = load('profiles', null);
-    if (!list || !list.length) {
+    var raw = load('profiles', null);
+    var list = [];
+    if (Object.prototype.toString.call(raw) === '[object Array]') {
+      for (var i = 0; i < raw.length; i++) {
+        var p = raw[i];
+        if (!p || typeof p !== 'object') continue;
+        var id = typeof p.id === 'string' && p.id ? p.id : null;
+        var name = typeof p.name === 'string' && p.name ? p.name : null;
+        if (!id || !name) continue;
+        list.push({ id: id, name: name, color: typeof p.color === 'number' ? p.color : 0 });
+      }
+    }
+    if (!list.length) {
       list = [{ id: 'default', name: 'Hauptprofil', color: 0 }];
       save('profiles', list);
     }
@@ -490,6 +750,9 @@
     state.activeProfile = id;
     save('activeProfile', id);
     loadProfileData();
+    // Sonst bliebe eine im Elternprofil aufgehobene Sperre im Kinderprofil offen.
+    state.unlocked = false;
+    applyLanguageFilter();
   }
 
   function profileName(id) {
@@ -662,10 +925,18 @@
   // ----------------------------------------------------------- Seiten ----
 
   function render() {
+    rememberFocus();
     renderTabs();
     clear(el.content);
 
-    if (state.loading) { el.content.appendChild(element('div', 'spinner')); return; }
+    if (state.loading) {
+      el.content.appendChild(element('div', 'spinner'));
+      el.content.appendChild(element('div', 'loading-text',
+        state.loadingStep || 'Bibliothek wird geladen …'));
+      el.content.appendChild(element('div', 'loading-sub',
+        'Große Playlisten brauchen einen Moment.'));
+      return;
+    }
     if (state.gate) { renderGate(); setTimeout(focusFirst, 0); return; }
     if (!state.source) { renderSetup(); return; }
 
@@ -682,7 +953,7 @@
     else if (state.tab === 'series') renderSeriesList();
     else renderFavorites();
 
-    setTimeout(ensureFocus, 0);
+    setTimeout(function () { if (!restoreFocus()) ensureFocus(); }, 0);
     // Zweiter Anlauf: Beim ersten Aufbau sind Bilder/Layout noch nicht fertig,
     // ein Fokus auf ein Element der Größe null greift nicht.
     setTimeout(ensureFocus, 350);
@@ -750,8 +1021,8 @@
     if (s2) el.content.appendChild(s2);
 
     // Merkliste vor den allgemeinen Regalen – bewusst Gemerktes zuerst.
-    var listItems = lib.movies.filter(function (m) { return onWatchlist(m.id); })
-      .concat(lib.series.filter(function (x) { return onWatchlist(x.id); }));
+    var listItems = pickByIds(lib.movies, state.watchlist)
+      .concat(pickByIds(lib.series, state.watchlist));
     var sList = shelf('Meine Liste', listItems, function (it) {
       return card(it.title, it.posterURL, function () {
         if (it.episodes !== undefined) openSeries(it); else openMovie(it);
@@ -800,7 +1071,7 @@
     var all = state.library.channels;
     if (!all.length) return renderEmpty('Keine Sender', 'Die Quelle hat keine Live-Sender geliefert.');
 
-    var groups = groupsOf(all);
+    var groups = groupsOf(all, 'live');
     el.content.appendChild(groupChips(groups, state.group.live, function (g) {
       state.group.live = g; render();
     }));
@@ -824,8 +1095,13 @@
     if (from + count < list.length) {
       var more = button('Weitere ' + Math.min(120, list.length - from - count) + ' Sender', function () {
         box.removeChild(more);
+        var ersteNeue = box.childNodes.length;
         renderChannelChunk(box, list, from + count, 120);
         collectFocusables();
+        // Der Knopf, auf dem der Fokus lag, ist weg – ohne Übergabe landet der
+        // Fokus im Nichts und der nächste Tastendruck springt an den Listenanfang.
+        var node = box.childNodes[ersteNeue];
+        if (node && node.focus) { node.focus(); revealFocus(node); }
       }, true);
       box.appendChild(more);
     }
@@ -835,12 +1111,14 @@
     var wrap = element('div', 'chips');
     var all = element('span', 'chip focusable' + (selected ? '' : ' active'), 'Alle');
     all.tabIndex = 0;
+    all.setAttribute('data-fkey', 'group:*');
     all.onclick = function () { onPick(null); };
     wrap.appendChild(all);
     for (var i = 0; i < groups.length && i < 40; i++) {
       (function (g) {
         var c = element('span', 'chip focusable' + (selected === g ? ' active' : ''), g);
         c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'group:' + g);
         c.onclick = function () { onPick(g); };
         wrap.appendChild(c);
       })(groups[i]);
@@ -855,6 +1133,9 @@
 
     var row = element('div', 'channel focusable' + (now ? ' on-air' : ''));
     row.tabIndex = 0;
+    // Ohne Merker sprang der Fokus nach der Favoritentaste aus Zeile 300 einer
+    // langen Liste wieder ganz nach oben.
+    row.setAttribute('data-fkey', 'ch:' + ch.id);
 
     if (number) row.appendChild(element('div', 'num', String(number)));
 
@@ -896,7 +1177,7 @@
     var all = state.library.movies;
     if (!all.length) return renderEmpty('Keine Filme', 'Die Quelle hat keine Filme geliefert.');
 
-    var groups = groupsOf(all);
+    var groups = groupsOf(all, 'movies');
     el.content.appendChild(groupChips(groups, state.group.movies, function (g) {
       state.group.movies = g; render();
     }));
@@ -904,7 +1185,7 @@
     var list = state.group.movies
       ? all.filter(function (m) { return m.group === state.group.movies; })
       : all;
-    list = sortItems(list, 'title');
+    list = sortItems(list, 'title', 'movies:' + (state.group.movies || '*'));
     el.content.appendChild(element('div', 'section-title', list.length + ' Filme'));
 
     var grid = element('div', 'grid');
@@ -920,7 +1201,7 @@
     var all = state.library.series;
     if (!all.length) return renderEmpty('Keine Serien', 'Die Quelle hat keine Serien geliefert.');
 
-    var groups = groupsOf(all);
+    var groups = groupsOf(all, 'series');
     el.content.appendChild(groupChips(groups, state.group.series, function (g) {
       state.group.series = g; render();
     }));
@@ -928,7 +1209,7 @@
     var list = state.group.series
       ? all.filter(function (s) { return s.group === state.group.series; })
       : all;
-    list = sortItems(list, 'title');
+    list = sortItems(list, 'title', 'series:' + (state.group.series || '*'));
     el.content.appendChild(element('div', 'section-title', list.length + ' Serien'));
 
     var grid = element('div', 'grid');
@@ -944,12 +1225,15 @@
 
   function renderFavorites() {
     var lib = state.library;
-    var favChannels = lib.channels.filter(function (c) { return isFavorite(c.id); });
-    var favMovies = lib.movies.filter(function (m) { return isFavorite(m.id); });
-    var favSeries = lib.series.filter(function (s) { return isFavorite(s.id); });
+    // Aus den gemerkten IDs heraus arbeiten: Fünf Voll-Scans über die
+    // Bibliothek für ein paar Dutzend Treffer waren pro Aufbau spürbar.
+    var favChannels = pickByIds(lib.channels, state.favorites);
+    var favMovies = pickByIds(lib.movies, state.favorites);
+    var favSeries = pickByIds(lib.series, state.favorites);
 
-    var anyList = lib.movies.some(function (m) { return onWatchlist(m.id); }) ||
-      lib.series.some(function (x) { return onWatchlist(x.id); });
+    var listMoviesFav = pickByIds(lib.movies, state.watchlist);
+    var listSeriesFav = pickByIds(lib.series, state.watchlist);
+    var anyList = listMoviesFav.length > 0 || listSeriesFav.length > 0;
     if (!favChannels.length && !favMovies.length && !favSeries.length && !anyList) {
       return renderEmpty('Noch nichts gemerkt',
         'Markiere Sender mit der blauen Taste oder setze Titel auf der Detailseite ' +
@@ -970,8 +1254,7 @@
     });
     if (s2) el.content.appendChild(s2);
 
-    var listItems = lib.movies.filter(function (m) { return onWatchlist(m.id); })
-      .concat(lib.series.filter(function (x) { return onWatchlist(x.id); }));
+    var listItems = listMoviesFav.concat(listSeriesFav);
     var s3 = shelf('Meine Liste', listItems, function (it) {
       return card(it.title, it.posterURL, function () {
         if (it.episodes !== undefined) openSeries(it); else openMovie(it);
@@ -995,7 +1278,13 @@
       img.onerror = function () { img.style.display = 'none'; };
       bd.appendChild(img);
     }
-    bd.appendChild(element('div', 'scrim'));
+    var scrim = element('div', 'scrim');
+    var d = designById(state.settings.design);
+    var rgb = hexToRgba(d.bg, 1).replace('rgba(', '').replace(')', '').split(',');
+    var base = rgb[0] + ',' + rgb[1] + ',' + rgb[2];
+    scrim.style.background =
+      'linear-gradient(to bottom, rgba(' + base + ',0) 30%, rgba(' + base + ',0.95) 100%)';
+    bd.appendChild(scrim);
     head.appendChild(bd);
     head.appendChild(element('div', 'detail-title', title));
     if (metaText) head.appendChild(element('div', 'detail-meta', metaText));
@@ -1069,9 +1358,13 @@
     if (m.cast) el.content.appendChild(element('div', 'detail-meta', 'Besetzung: ' + m.cast));
 
     // Ähnliche Titel aus derselben Kategorie.
-    var similar = state.library.movies.filter(function (x) {
-      return x.group === m.group && x.id !== m.id;
-    }).slice(0, 20);
+    // Schleife mit Abbruch: `.filter()` lief über alle 142.000 Titel, obwohl
+    // nur 20 gezeigt werden.
+    var similar = [];
+    for (var si = 0; si < state.library.movies.length && similar.length < 20; si++) {
+      var cand = state.library.movies[si];
+      if (cand.group === m.group && cand.id !== m.id) similar.push(cand);
+    }
     var s = shelf('Ähnliche Titel', similar, function (x) {
       return card(x.title, x.posterURL, function () { openMovie(x); });
     });
@@ -1140,6 +1433,7 @@
         (function (n) {
           var c = element('span', 'chip focusable' + (n === current ? ' active' : ''), 'Staffel ' + n);
           c.tabIndex = 0;
+          c.setAttribute('data-fkey', 'season:' + n);
           c.onclick = function () { state.view.season = n; render(); };
           chips.appendChild(c);
         })(seasons[j]);
@@ -1199,11 +1493,19 @@
     var q = (state.view.query || '').toLowerCase();
     if (q.length < 2) return;
 
-    function matches(text) { return text && text.toLowerCase().indexOf(q) >= 0; }
-
-    var ch = state.library.channels.filter(function (c) { return matches(c.name); }).slice(0, 30);
-    var mv = state.library.movies.filter(function (m) { return matches(m.title); }).slice(0, 30);
-    var sr = state.library.series.filter(function (s) { return matches(s.title); }).slice(0, 30);
+    // Suche mit Abbruch bei 30 Treffern statt drei Voll-Scans über 215.000
+    // Titel mit je einem neuen Kleinbuchstaben-String.
+    function search(list, field, limit) {
+      var out = [];
+      for (var i = 0; i < list.length && out.length < limit; i++) {
+        var text = list[i][field];
+        if (text && text.toLowerCase().indexOf(q) >= 0) out.push(list[i]);
+      }
+      return out;
+    }
+    var ch = search(state.library.channels, 'name', 30);
+    var mv = search(state.library.movies, 'title', 30);
+    var sr = search(state.library.series, 'title', 30);
 
     if (!ch.length && !mv.length && !sr.length) {
       return renderEmpty('Keine Treffer', 'Für „' + state.view.query + '" wurde nichts gefunden.');
@@ -1273,6 +1575,29 @@
 
   // ---- Einstellungen ----
 
+  /**
+   * Quelle für die Anzeige unkenntlich machen.
+   *
+   * M3U-Adressen von Panels enthalten Benutzer und Passwort als Parameter –
+   * ungekürzt stand das Passwort gut lesbar auf dem Fernsehbildschirm und auf
+   * jedem Foto davon.
+   */
+  function maskSource(src) {
+    if (src.kind === 'xtream') return src.host + '  (Benutzer: ' + maskValue(src.user) + ')';
+    var url = src.m3u || '';
+    return url
+      .replace(/([?&](?:username|user|password|pass)=)([^&]*)/gi, function (all, key, value) {
+        return key + maskValue(decodeURIComponent(value));
+      })
+      .slice(0, 90);
+  }
+
+  function maskValue(v) {
+    v = String(v || '');
+    if (v.length <= 2) return '***';
+    return v.slice(0, 2) + '***';
+  }
+
   function renderSettings() {
     el.content.appendChild(backButton());
     var panel = element('div', 'panel');
@@ -1280,7 +1605,7 @@
 
     var src = state.source;
     panel.appendChild(element('p', null, src
-      ? ('Aktuelle Quelle: ' + (src.kind === 'xtream' ? src.host : src.m3u))
+      ? ('Aktuelle Quelle: ' + maskSource(src))
       : 'Keine Quelle eingerichtet.'));
 
     // Downloads sind auf diesem Gerät nicht möglich – das gehört gesagt,
@@ -1306,7 +1631,14 @@
       reloadSource();
     }));
     actions.appendChild(button('Quelle ändern', function () {
-      state.source = null; state.view = null; render();
+      // Alles verwerfen, was zur alten Quelle gehört: Sonst zeigt das EPG des
+      // alten Anbieters weiter auf Kanäle des neuen, und eine gewählte
+      // Kategorie existiert dort womöglich gar nicht mehr.
+      state.source = null; state.view = null;
+      state.epg = {}; state.rawLibrary = null;
+      state.library = { channels: [], movies: [], series: [] };
+      state.group = { live: null, movies: null, series: null };
+      render();
     }, true));
     actions.appendChild(button('Favoriten löschen (dieses Profil)', function () {
       state.favorites = {}; saveScoped('favorites', state.favorites);
@@ -1329,6 +1661,7 @@
         var c = element('span', 'chip focusable' + (active ? ' active' : ''),
           (active ? '● ' : '') + prof.name);
         c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'profile:' + prof.id);
         c.onclick = function () { switchProfile(prof.id); render(); };
         profileBox.appendChild(c);
       })(state.profiles[pi]);
@@ -1378,6 +1711,7 @@
       (function (d) {
         var c = element('span', 'chip focusable' + (state.settings.design === d.id ? ' active' : ''), d.name);
         c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'design:' + d.id);
         c.onclick = function () {
           state.settings.design = d.id; save('settings', state.settings);
           applyTheme(); render();
@@ -1393,6 +1727,7 @@
       (function (a) {
         var c = element('span', 'chip focusable' + (state.settings.accent === a.id ? ' active' : ''), a.name);
         c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'accent:' + a.id);
         c.style.borderColor = a.color;
         c.onclick = function () {
           state.settings.accent = a.id; save('settings', state.settings);
@@ -1418,6 +1753,7 @@
       (function (o) {
         var c = element('span', 'chip focusable' + (state.settings.sort === o.id ? ' active' : ''), o.name);
         c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'sort:' + o.id);
         c.onclick = function () {
           state.settings.sort = o.id; save('settings', state.settings); render();
         };
@@ -1443,6 +1779,7 @@
         var c = element('span', 'chip focusable' + (on ? ' active' : ''),
           (Core.LANG_FLAGS[code] || '') + ' ' + Core.LANG_NAMES[code]);
         c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'lang:' + code);
         c.onclick = function () {
           var idx = state.settings.languages.indexOf(code);
           if (idx >= 0) state.settings.languages.splice(idx, 1);
@@ -1494,6 +1831,7 @@
           var c = element('span', 'chip focusable' + (hidden ? ' active' : ''),
             (hidden ? '✕ ' : '') + name);
           c.tabIndex = 0;
+          c.setAttribute('data-fkey', 'hide:' + name);
           c.onclick = function () {
             var idx = state.settings.hiddenGroups.indexOf(name);
             if (idx >= 0) state.settings.hiddenGroups.splice(idx, 1);
@@ -1575,6 +1913,7 @@
           var c = element('span', 'chip focusable' + (locked ? ' active' : ''),
             (locked ? '🔒 ' : '') + name);
           c.tabIndex = 0;
+          c.setAttribute('data-fkey', 'lock:' + name);
           c.onclick = function () {
             var idx = state.settings.lockedGroups.indexOf(name);
             if (idx >= 0) state.settings.lockedGroups.splice(idx, 1);
@@ -1633,6 +1972,9 @@
    */
   function applyLanguageFilter() {
     if (!state.rawLibrary) return;
+    groupCache = {};        // Bibliothek ändert sich – Puffer verwerfen
+    allGroupsCache = null;
+    sortCache = {};
     var lib = state.settings.languages.length
       ? Core.filterByLanguage(state.rawLibrary, state.settings.languages, state.settings.strict)
       : state.rawLibrary;
@@ -1643,7 +1985,11 @@
       blocked = blocked.concat(state.settings.lockedGroups);
     }
     if (blocked.length) {
-      var isBlocked = function (item) { return blocked.indexOf(item.group) >= 0; };
+      // Nachschlagewerk statt indexOf: Bei 200 gesperrten Kategorien und
+      // 142.000 Filmen wären das zig Millionen String-Vergleiche – pro Klick.
+      var blockedSet = {};
+      for (var b = 0; b < blocked.length; b++) blockedSet[blocked[b]] = true;
+      var isBlocked = function (item) { return blockedSet[item.group] === true; };
       lib = {
         channels: lib.channels.filter(function (c) { return !isBlocked(c); }),
         movies: lib.movies.filter(function (m) { return !isBlocked(m); }),
@@ -1655,7 +2001,10 @@
 
   /** Alle Kategorien der ROHEN Bibliothek – auch die ausgeblendeten, sonst
    *  ließen die sich nie wieder einblenden. */
+  var allGroupsCache = null;
+
   function allGroups() {
+    if (allGroupsCache) return allGroupsCache;
     if (!state.rawLibrary) return [];
     var seen = {}, out = [];
     function add(list) {
@@ -1666,11 +2015,13 @@
     }
     add(state.rawLibrary.channels); add(state.rawLibrary.movies); add(state.rawLibrary.series);
     out.sort();
+    allGroupsCache = out;
     return out;
   }
 
   function afterLoad(lib) {
     state.rawLibrary = lib;
+    state.epgURL = lib.epgURL || null;
     applyLanguageFilter();
     toast(state.library.channels.length + ' Sender · ' + state.library.movies.length +
       ' Filme · ' + state.library.series.length + ' Serien');
@@ -1678,71 +2029,118 @@
   }
 
   function loadM3USource(url) {
-    state.loading = true; render();
+    state.loading = true;
+    state.loadingStep = 'Playlist wird geladen …';
+    render();
     httpGet(url, function (err, text) {
       state.loading = false;
-      if (err) { render(); return toast('M3U konnte nicht geladen werden: ' + err.message, 6000); }
+      state.loadingStep = null;
+      if (err) { render(); return toast('M3U konnte nicht geladen werden: ' + err.message, 8000); }
       state.source = { kind: 'm3u', m3u: url };
       save('source', state.source);
-      afterLoad(Core.parseM3U(text, 'm3u'));
-    }, 60000);
+      state.epg = {};
+      // Ohne den Fang bliebe bei einem Parser-Fehler der Spinner für immer
+      // stehen – und die Oberfläche hätte kein bedienbares Element mehr.
+      try {
+        afterLoad(Core.parseM3U(text, 'm3u'));
+        loadEpg();
+      } catch (parseError) {
+        render();
+        toast('Playlist konnte nicht gelesen werden: ' + parseError.message, 9000);
+      }
+    }, CATALOG_TIMEOUT);
   }
 
   function loadXtreamSource(host, user, pass) {
-    state.loading = true; render();
-    var pending = 4;
+    state.loading = true;
+    state.loadingStep = 'Anmeldung wird geprüft …';
+    render();
+
     var categories = { live: {}, vod: {}, series: {} };
     var lib = { channels: [], movies: [], series: [] };
-    var failed = null;
+    var problems = [];
+    var authError = null;
 
-    function step() {
-      if (--pending > 0) return;
+    function fail(bereich, err) {
+      // Jeden Teilbereich einzeln benennen: Früher wurden Fehler bei Filmen und
+      // Serien verschluckt – der Nutzer sah eine leere Seite und hielt seinen
+      // Anbieter für kaputt.
+      problems.push(bereich + ' (' + (err && err.message ? err.message : 'unbekannt') + ')');
+    }
+
+    function finish() {
       state.loading = false;
-      if (failed && !lib.channels.length && !lib.movies.length && !lib.series.length) {
-        render();
-        return toast('Anmeldung fehlgeschlagen: ' + failed.message, 6000);
-      }
+      state.loadingStep = null;
+      if (authError) { render(); return toast('Anmeldung fehlgeschlagen: ' + authError.message, 8000); }
       state.source = { kind: 'xtream', host: host, user: user, pass: pass };
       save('source', state.source);
-      afterLoad(lib);
+      try {
+        afterLoad(lib);
+      } catch (parseError) {
+        render();
+        return toast('Bibliothek konnte nicht aufgebaut werden: ' + parseError.message, 9000);
+      }
+      if (problems.length) {
+        toast('Teilweise geladen – nicht abrufbar: ' + problems.join(', ') +
+          '. In den Einstellungen „Neu laden" versuchen.', 9000);
+      }
       loadEpg();
     }
 
-    function categoriesThen(action, key, then) {
-      httpGetJson(Core.xtreamApi(host, user, pass, action), function (err, json) {
-        if (!err && json) categories[key] = Core.parseCategories(json);
-        then();
-      });
+    // Nacheinander statt gleichzeitig: Drei zweistellige Megabyte-Antworten
+    // parallel teilen sich die Bandbreite und laufen eher ins Zeitlimit.
+    function step1auth() {
+      httpGetJson(Core.xtreamApi(host, user, pass, null), function (err, json) {
+        if (err) authError = err;
+        else if (json && json.user_info && Number(json.user_info.auth) === 0) {
+          authError = new Error('Benutzer oder Passwort falsch');
+        }
+        if (authError) return finish();
+        state.loadingStep = 'Sender werden geladen …'; render();
+        step2live();
+      }, 30000);
     }
 
-    categoriesThen('get_live_categories', 'live', function () {
-      httpGetJson(Core.xtreamApi(host, user, pass, 'get_live_streams'), function (err, json) {
-        if (err) failed = err;
-        else lib.channels = Core.parseLiveStreams(json, categories.live, host, user, pass, 'xtream');
-        step();
-      });
-    });
-    categoriesThen('get_vod_categories', 'vod', function () {
-      httpGetJson(Core.xtreamApi(host, user, pass, 'get_vod_streams'), function (err, json) {
-        if (!err && json) lib.movies = Core.parseVodStreams(json, categories.vod, host, user, pass, 'xtream');
-        step();
-      });
-    });
-    categoriesThen('get_series_categories', 'series', function () {
-      httpGetJson(Core.xtreamApi(host, user, pass, 'get_series'), function (err, json) {
-        if (!err && json) lib.series = Core.parseSeriesList(json, categories.series, 'xtream');
-        step();
-      });
-    });
-    // Vierter Schritt: Auth prüfen, damit ein falsches Passwort eine klare
-    // Meldung ergibt statt dreier leerer Listen.
-    httpGetJson(Core.xtreamApi(host, user, pass, null), function (err, json) {
-      if (err) failed = err;
-      else if (json && json.user_info && Number(json.user_info.auth) === 0) {
-        failed = new Error('Benutzer oder Passwort falsch');
-      }
-      step();
-    });
+    function step2live() {
+      httpGetJson(Core.xtreamApi(host, user, pass, 'get_live_categories'), function (e1, cats) {
+        if (!e1 && cats) categories.live = Core.parseCategories(cats);
+        httpGetJson(Core.xtreamApi(host, user, pass, 'get_live_streams'), function (err, json) {
+          if (err) fail('Sender', err);
+          // Ohne den Fang bliebe die Kette stehen und der Spinner für immer.
+          else try { lib.channels = Core.parseLiveStreams(json, categories.live, host, user, pass, 'xtream'); }
+          catch (pe) { fail('Sender', pe); }
+          state.loadingStep = 'Filme werden geladen …'; render();
+          step3vod();
+        }, CATALOG_TIMEOUT);
+      }, 30000);
+    }
+
+    function step3vod() {
+      httpGetJson(Core.xtreamApi(host, user, pass, 'get_vod_categories'), function (e1, cats) {
+        if (!e1 && cats) categories.vod = Core.parseCategories(cats);
+        httpGetJson(Core.xtreamApi(host, user, pass, 'get_vod_streams'), function (err, json) {
+          if (err) fail('Filme', err);
+          else try { lib.movies = Core.parseVodStreams(json, categories.vod, host, user, pass, 'xtream'); }
+          catch (pe) { fail('Filme', pe); }
+          state.loadingStep = 'Serien werden geladen …'; render();
+          step4series();
+        }, CATALOG_TIMEOUT);
+      }, 30000);
+    }
+
+    function step4series() {
+      httpGetJson(Core.xtreamApi(host, user, pass, 'get_series_categories'), function (e1, cats) {
+        if (!e1 && cats) categories.series = Core.parseCategories(cats);
+        httpGetJson(Core.xtreamApi(host, user, pass, 'get_series'), function (err, json) {
+          if (err) fail('Serien', err);
+          else try { lib.series = Core.parseSeriesList(json, categories.series, 'xtream'); }
+          catch (pe) { fail('Serien', pe); }
+          finish();
+        }, CATALOG_TIMEOUT);
+      }, 30000);
+    }
+
+    step1auth();
   }
 
   function reloadSource() {
@@ -1752,13 +2150,26 @@
   }
 
   function loadEpg() {
-    if (!state.source || state.source.kind !== 'xtream') return;
-    var url = state.source.host + '/xmltv.php?username=' +
-      encodeURIComponent(state.source.user) + '&password=' + encodeURIComponent(state.source.pass);
+    if (!state.source) return;
+    var url;
+    if (state.source.kind === 'xtream') {
+      url = state.source.host + '/xmltv.php?username=' +
+        encodeURIComponent(state.source.user) + '&password=' + encodeURIComponent(state.source.pass);
+    } else {
+      // M3U-Playlisten nennen ihre EPG-Adresse in der Kopfzeile.
+      url = state.epgURL;
+      if (!url) return;
+    }
     httpGet(url, function (err, text) {
       if (err || !text) return;          // EPG ist Zugabe – ein Fehler darf nichts kippen
       try {
-        state.epg = Core.parseXMLTV(text);
+        // Nur Sendungen der tatsächlich vorhandenen Kanäle behalten: Die Datei
+        // eines großen Anbieters ist dreistellig Megabyte groß.
+        var ids = [];
+        for (var c = 0; c < state.library.channels.length; c++) {
+          if (state.library.channels[c].epgID) ids.push(state.library.channels[c].epgID);
+        }
+        state.epg = Core.parseXMLTV(text, ids.length ? ids : null);
         if (!state.view && (state.tab === 'live' || state.tab === 'home')) render();
       } catch (e) { /* stumm */ }
     }, 60000);
@@ -1768,7 +2179,6 @@
 
   var player = {
     open: false,
-    minimized: false,
     kind: null,
     id: null,
     title: '',
@@ -1786,13 +2196,14 @@
   function playItem(title, url, subtitle, kind, id, resumeSeconds, context, meta) {
     player.meta = meta || {};
     player.open = true;
-    player.minimized = false;
-    el.player.className = 'open';
     player.kind = kind;
     player.id = id;
     player.title = title;
     player.context = context || null;
 
+    player.subtitle = subtitle || '';
+    player.sourceUrl = url;
+    player.lastSaved = undefined;
     el.playerTitle.textContent = title;
     el.playerSub.textContent = subtitle || '';
     el.player.className = 'open';
@@ -1801,13 +2212,20 @@
 
     el.video.src = url;
     el.video.load();
+    // Einen noch offenen Resume-Wunsch des vorherigen Titels entfernen: Blieb er
+    // hängen (Stream lud nie), sprang der NÄCHSTE Film an dessen Position.
+    if (player.seekHandler) {
+      el.video.removeEventListener('loadedmetadata', player.seekHandler);
+      player.seekHandler = null;
+    }
     if (resumeSeconds && resumeSeconds > 0) {
       // currentTime lässt sich erst setzen, wenn Metadaten da sind.
-      var seek = function () {
+      player.seekHandler = function () {
         try { el.video.currentTime = resumeSeconds; } catch (e) { /* egal */ }
-        el.video.removeEventListener('loadedmetadata', seek);
+        el.video.removeEventListener('loadedmetadata', player.seekHandler);
+        player.seekHandler = null;
       };
-      el.video.addEventListener('loadedmetadata', seek);
+      el.video.addEventListener('loadedmetadata', player.seekHandler);
     }
     var p = el.video.play();
     if (p && p.catch) p.catch(function () { /* Autoplay-Ablehnung ignorieren */ });
@@ -1826,7 +2244,13 @@
         el.scrubFill.style.width = ((pos / dur) * 100) + '%';
         el.times.textContent = clock(pos) + '  /  ' + clock(dur);
         // Fortschritt alle 10 s sichern, damit „Weiterschauen" stimmt.
-        if (Math.floor(pos) % 10 === 0) saveProgress(pos, dur);
+        // Nicht `Math.floor(pos) % 10`: Die Medienzeit springt (19,95 → 21,02),
+        // dabei wurde das Fenster übersprungen – oder bei Pause im Sekundentakt
+        // die ganze Verlaufsliste geschrieben.
+        if (player.lastSaved === undefined || Math.abs(pos - player.lastSaved) >= 10) {
+          player.lastSaved = pos;
+          saveProgress(pos, dur);
+        }
       } else if (player.kind === 'live') {
         el.times.textContent = 'Live';
       }
@@ -1840,62 +2264,63 @@
   }
 
   function saveProgress(position, duration) {
-    if (!player.id || player.kind === 'live') return;
+    if (!player.id) return;
+    if (player.kind === 'live') {
+      // Sender liefern keine Laufzeit – aber der Besuch selbst gehört in den
+      // Verlauf: Er speist „Zuletzt gesehen", die Kachel „Verschiedene Sender"
+      // und die Empfehlungen. Ohne ihn stand dort dauerhaft eine Null.
+      state.progress[player.id] = {
+        id: player.id, kind: 'live', title: player.title,
+        url: '', image: (player.meta && player.meta.image) || null,
+        group: (player.meta && player.meta.group) || null,
+        position: 0, duration: 0, updatedAt: Date.now(),
+      };
+      trimProgress();
+      saveScoped('progress', state.progress);
+      return;
+    }
     var prev = state.progress[player.id] || {};
     state.progress[player.id] = {
       id: player.id, kind: player.kind, title: player.title,
-      url: el.video.currentSrc || el.video.src,
+      // Bewusst die ursprünglich angeforderte Adresse, nicht `currentSrc`:
+      // Letztere trägt bei Xtream Benutzer und Passwort im Pfad, und der
+      // Verlauf liegt unverschlüsselt im Gerätespeicher.
+      url: player.sourceUrl || '',
       // Poster und Kategorie kommen vom Aufrufer: ohne sie hätte
       // „Weiterschauen" kein Bild und die Empfehlungen keine Grundlage.
       image: (player.meta && player.meta.image) || prev.image || null,
       group: (player.meta && player.meta.group) || prev.group || null,
       position: position, duration: duration, updatedAt: Date.now(),
     };
+    trimProgress();
     saveScoped('progress', state.progress);
   }
 
-  /**
-   * Wiedergabe in die kleine Ecke legen und weiterstöbern.
-   *
-   * WICHTIG (auf dem Gerät geprüft): Der Fernseher rendert Video auf einer
-   * Hardware-Ebene, die sich nicht verkleinern lässt – weder per CSS noch über
-   * eine erreichbare Luna-API (`setDisplayWindow` existiert auf webOS 4 nicht,
-   * der DownloadManager ist für Dev-Apps gesperrt). Verkleinert man nur das
-   * <video>, läuft der Ton weiter und das Bild bleibt schwarz. Deshalb wird
-   * das Videofeld hier bewusst mit dem Cover abgedeckt und beschriftet.
-   */
-  function minimizePlayer() {
-    if (!player.open) return;
-    player.minimized = true;
-    el.player.className = 'open mini';
-    el.miniTitle.textContent = player.title;
-    if (player.meta && player.meta.image) {
-      el.miniImage.src = player.meta.image;
-      el.miniImage.style.display = '';
-    } else {
-      el.miniImage.removeAttribute('src');
-      el.miniImage.style.display = 'none';
+  /** Verlauf deckeln – sonst sprengt er irgendwann den 5-MB-Gerätespeicher. */
+  function trimProgress() {
+    var ids = [];
+    for (var k in state.progress) {
+      if (Object.prototype.hasOwnProperty.call(state.progress, k)) ids.push(k);
     }
-    render();
-  }
-
-  function expandPlayer() {
-    if (!player.open) return;
-    player.minimized = false;
-    el.player.className = 'open';
-    pokeChrome();
-    setTimeout(function () { el.video.focus(); }, 0);
+    if (ids.length <= 200) return;
+    ids.sort(function (a, b) { return state.progress[a].updatedAt - state.progress[b].updatedAt; });
+    for (var d = 0; d < ids.length - 200; d++) delete state.progress[ids[d]];
   }
 
   function closePlayer() {
-    player.minimized = false;
     if (el.video.duration && isFinite(el.video.duration)) {
       saveProgress(el.video.currentTime || 0, el.video.duration);
     }
     player.open = false;
     if (player.tickTimer) { clearInterval(player.tickTimer); player.tickTimer = null; }
+    if (player.hideTimer) { clearTimeout(player.hideTimer); player.hideTimer = null; }
+    player.context = null;
+    player.meta = null;
+    if (player.seekHandler) {
+      el.video.removeEventListener('loadedmetadata', player.seekHandler);
+      player.seekHandler = null;
+    }
     el.player.className = '';
-    el.miniImage.removeAttribute('src');
     el.video.pause();
     el.video.removeAttribute('src');
     el.video.load();
@@ -1906,6 +2331,15 @@
     el.chrome.className = '';
     if (player.hideTimer) clearTimeout(player.hideTimer);
     player.hideTimer = setTimeout(function () { el.chrome.className = 'hidden'; }, 4000);
+  }
+
+  /** Spulen, begrenzt auf die tatsächliche Länge (sonst wirft die Pipeline). */
+  function seekBy(seconds) {
+    var dur = el.video.duration;
+    var ziel = (el.video.currentTime || 0) + seconds;
+    if (ziel < 0) ziel = 0;
+    if (dur && isFinite(dur) && ziel > dur - 1) ziel = Math.max(0, dur - 1);
+    try { el.video.currentTime = ziel; } catch (e) { /* nicht spulbar */ }
   }
 
   /** Sender wechseln (Zapping) – nur bei Live. */
@@ -1946,29 +2380,34 @@
   function onKey(e) {
     var code = e.keyCode;
 
-    // In der Mini-Ansicht gilt die normale Navigation – nur OK auf der
-    // Mini-Karte und die Stop-Taste sind belegt.
-    if (player.open && player.minimized) {
-      if (code === 413) { closePlayer(); e.preventDefault(); return; }
-      if (code === 13 && document.activeElement === el.miniHit) {
-        expandPlayer(); e.preventDefault(); return;
+    /*
+     * Beim Tippen gehören die Tasten dem Textfeld.
+     * Vorher rief Backspace auf dem Einrichtungsbildschirm `exitApp()` auf –
+     * jeder Korrekturversuch schloss also die App –, und die Pfeiltasten
+     * stahlen dem Feld die Cursorbewegung.
+     */
+    var el0 = document.activeElement;
+    if (el0 && (el0.tagName === 'INPUT' || el0.tagName === 'TEXTAREA')) {
+      if (code === 8 || code === 37 || code === 39 || code === 35 || code === 36 || code === 46) {
+        return;
       }
-      // sonst: durchfallen zur normalen Navigation
-    } else if (player.open) {
+    }
+
+    if (player.open) {
       pokeChrome();
-      // Zurück legt die Wiedergabe in die Ecke, statt sie abzuwürgen.
-      if (code === 461 || code === 8 || code === 27) { minimizePlayer(); e.preventDefault(); return; }
-      if (code === 413) { closePlayer(); e.preventDefault(); return; }
+      if (code === 461 || code === 8 || code === 27 || code === 413) {
+        closePlayer(); e.preventDefault(); return;
+      }
       if (code === 13 || code === 415 || code === 19) {
         if (el.video.paused) el.video.play(); else el.video.pause();
         e.preventDefault(); return;
       }
       if (code === 39 || code === 417) {
-        if (player.kind === 'live') zap(1); else el.video.currentTime += 10;
+        if (player.kind === 'live') zap(1); else seekBy(10);
         e.preventDefault(); return;
       }
       if (code === 37 || code === 412) {
-        if (player.kind === 'live') zap(-1); else el.video.currentTime -= 10;
+        if (player.kind === 'live') zap(-1); else seekBy(-10);
         e.preventDefault(); return;
       }
       if (code === 38) { if (player.kind === 'live') zap(-1); e.preventDefault(); return; }
@@ -1978,7 +2417,10 @@
 
     if (code === 461 || code === 8) {
       if (state.view) { state.view = null; render(); e.preventDefault(); return; }
-      if (typeof webOS !== 'undefined' && webOS.platformBack) webOS.platformBack();
+      if (state.gate) return;              // Profilwahl ist die oberste Ebene
+      if (state.tab !== 'home') { state.tab = 'home'; render(); e.preventDefault(); return; }
+      exitApp();
+      e.preventDefault();
       return;
     }
     // Blaue Taste: Favorit umschalten für die fokussierte Zeile/Karte.
@@ -2005,6 +2447,28 @@
     }
   }
 
+  /**
+   * App beenden.
+   *
+   * `appinfo.json` setzt `disableBackHistoryAPI`, die Plattform beendet also
+   * NICHT mehr selbst – das muss die App tun. `webOS.platformBack()` steht nur
+   * zur Verfügung, wenn webOSTV.js eingebunden ist; ohne das blieb der Nutzer
+   * auf der Startseite gefangen und kam nur noch über die Home-Taste heraus.
+   * Deshalb hier drei Wege, vom besten zum gröbsten.
+   */
+  function exitApp() {
+    if (typeof webOS !== 'undefined' && webOS.platformBack) { webOS.platformBack(); return; }
+    if (typeof window.close === 'function') {
+      try { window.close(); return; } catch (e) { /* weiter unten */ }
+    }
+    // Letzter Ausweg: Der Systemdienst schließt die App zuverlässig.
+    try {
+      var b = new PalmServiceBridge();
+      b.onservicecallback = function () {};
+      b.call('luna://com.webos.applicationManager/close', JSON.stringify({ id: 'de.app.glasstv' }));
+    } catch (e2) { /* dann bleibt nur die Home-Taste */ }
+  }
+
   // ------------------------------------------------------------ Start ----
 
   function boot() {
@@ -2019,9 +2483,6 @@
       scrubFill: document.getElementById('player-scrub-fill'),
       times: document.getElementById('player-times'),
       toast: document.getElementById('toast'),
-      miniHit: document.getElementById('mini-hit'),
-      miniTitle: document.getElementById('mini-title'),
-      miniImage: document.getElementById('mini-image'),
       search: document.getElementById('btn-search'),
       guide: document.getElementById('btn-guide'),
       settings: document.getElementById('btn-settings'),
@@ -2040,14 +2501,17 @@
     state.gate = state.profiles.length > 1;
     var saved = load('settings', null);
     if (saved) {
-      state.settings.languages = saved.languages || [];
+      // Beschädigte Werte würden sonst erst beim Klicken auffallen (splice/push
+      // auf einem String wirft).
+      function asArray(v) { return Object.prototype.toString.call(v) === '[object Array]' ? v : []; }
+      state.settings.languages = asArray(saved.languages);
       state.settings.strict = saved.strict !== false;
-      state.settings.design = saved.design || 'midnight';
+      state.settings.design = saved.design || 'perl';
       state.settings.accent = saved.accent || 'violet';
       state.settings.sort = saved.sort || 'standard';
       state.settings.pin = saved.pin || null;
-      state.settings.lockedGroups = saved.lockedGroups || [];
-      state.settings.hiddenGroups = saved.hiddenGroups || [];
+      state.settings.lockedGroups = asArray(saved.lockedGroups);
+      state.settings.hiddenGroups = asArray(saved.hiddenGroups);
     }
     applyTheme();
 
@@ -2056,14 +2520,49 @@
     el.settings.onclick = function () { state.view = { type: 'settings' }; render(); };
 
     el.video.addEventListener('error', function () {
-      toast('Dieser Stream lässt sich auf dem Fernseher nicht abspielen ' +
-        '(Format wird nicht unterstützt).', 7000);
+      // Ohne Schließen bliebe ein schwarzes Vollbild stehen, dessen Bedienhinweis
+      // nach vier Sekunden ausgeblendet ist.
+      toast('Dieser Stream lässt sich auf dem Fernseher nicht abspielen.', 8000);
+      closePlayer();
+    });
+    // Zwischen Tastendruck und erstem Bild vergehen bei IPTV mehrere Sekunden –
+    // ohne Rückmeldung wirkt das wie ein Absturz.
+    el.video.addEventListener('waiting', function () {
+      el.playerSub.textContent = 'Wird geladen …';
+      pokeChrome();
+    });
+    el.video.addEventListener('playing', function () {
+      if (el.playerSub.textContent === 'Wird geladen …') el.playerSub.textContent = player.subtitle || '';
     });
     el.video.addEventListener('ended', function () {
       if (!playNextEpisode()) closePlayer();
     });
 
-    el.miniHit.onclick = function () { expandPlayer(); };
+    /*
+     * Letzte Absicherung: Ohne Konsole am Fernseher ist ein Fehler beim
+     * Aufbauen für den Nutzer nur ein halb gezeichneter Bildschirm. Hier wird
+     * er sichtbar gemacht und die Oberfläche in einen bedienbaren Zustand
+     * zurückgesetzt.
+     */
+    // Geht die App in den Hintergrund (Home-Taste), muss der Ton aufhören –
+    // sonst läuft der Stream unbemerkt weiter.
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden && player.open && !el.video.paused) {
+        if (el.video.duration && isFinite(el.video.duration)) {
+          saveProgress(el.video.currentTime || 0, el.video.duration);
+        }
+        el.video.pause();
+      }
+    });
+
+    window.onerror = function (message) {
+      try {
+        state.loading = false;
+        state.loadingStep = null;
+        toast('Es ist ein Fehler aufgetreten: ' + message, 9000);
+      } catch (e) { /* dann hilft nur noch der Neustart */ }
+      return false;
+    };
 
     document.addEventListener('keydown', onKey);
 

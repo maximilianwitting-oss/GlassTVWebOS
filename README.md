@@ -23,9 +23,10 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   und ein Programmführer (grüne Taste).
 - **Player**: HTML5-`<video>` – Fortschrittsanzeige, Weiterschauen-Position,
   automatische nächste Folge, Zapping mit ◀ ▶ bei Live.
-- **Designs**: 12 dunkle Designs und 15 Akzentfarben aus der iOS-App, plus
-  „Überrasch mich". Helle Designs bewusst weggelassen: Sie blenden im
-  abgedunkelten Wohnzimmer.
+- **Designs**: 18 Designs (6 helle, 12 dunkle) und 15 Akzentfarben aus der
+  iOS-App, plus „Überrasch mich". Standard ist das helle „Perl" wie dort. Ein
+  Wechsel tauscht das komplette Schema – Flächen, Ränder und Textfarben ziehen
+  mit, sonst stünde eine dunkle Karte auf hellem Grund.
 - **Sprachfilter** mit demselben Sicherheitsnetz wie iOS, **Kategorien
   ausblenden** und **Kindersicherung** (PIN sperrt Kategorien app-weit).
 - **Profile** mit „Wer schaut?"-Auswahl beim Start (erscheint nur ab dem
@@ -45,11 +46,8 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   Wochenübersicht und Top-Kategorien (Einstellungen → Statistik). Gezählt
   werden **Titel je Tag**, keine erfundenen Minuten – ein Verlaufseintrag trägt
   nur einen Stand, eine echte Sehzeit je Tag gibt er nicht her.
-- **Mini-Ansicht**: Zurück im Player legt die Wiedergabe in die rechte untere
-  Ecke, man kann weiterstöbern; OK darauf blendet wieder auf, die Stop-Taste
-  beendet. Siehe Einschränkung unten – dort läuft nur der **Ton** weiter.
-
-Nicht enthalten: Downloads (auf dem Gerät nicht möglich, siehe unten).
+Nicht enthalten: Downloads und Mini-Player – beides ist auf diesem Gerät
+technisch nicht möglich (siehe unten).
 
 ## Was auf dem Gerät gilt
 
@@ -66,13 +64,12 @@ Nicht enthalten: Downloads (auf dem Gerät nicht möglich, siehe unten).
   ist schwarz, obwohl auf dem Schirm das Bild steht.
 - **Große Listen** werden bewusst gedeckelt (120 Senderzeilen, 150 Kacheln,
   Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst ein.
-- **Kein Bild im Mini-Player.** Das Video liegt auf einer Hardware-Ebene, die
-  sich nicht verkleinern lässt: Schrumpft man das `<video>` per CSS, läuft der
-  Ton weiter und das Bild bleibt schwarz. Die naheliegende Abhilfe – die
-  Videoebene über `luna://com.webos.media/setDisplayWindow` verschieben – gibt
-  es auf webOS 4 nicht (auf dem Gerät geprüft, ebenso zwei Alternativpfade).
-  Deshalb deckt die Mini-Ansicht das Feld bewusst mit dem Cover ab und sagt
-  „♪ Ton läuft weiter", statt einen schwarzen Kasten zu zeigen.
+- **Kein Mini-Player.** Das Video liegt auf einer Hardware-Ebene, die sich
+  nicht verkleinern lässt: Schrumpft man das `<video>` per CSS, läuft der Ton
+  weiter und das Bild bleibt schwarz. Die naheliegende Abhilfe – die Videoebene
+  über `luna://com.webos.media/setDisplayWindow` verschieben – gibt es auf
+  webOS 4 nicht (auf dem Gerät geprüft, ebenso zwei Alternativpfade). Ein
+  Mini-Player wurde deshalb wieder entfernt, statt eine halbe Lösung zu lassen.
 - **Downloads sind nicht möglich.** `luna://com.webos.service.downloadmanager`
   existiert, lehnt den Aufruf für selbstgebaute Apps aber ab
   („Denied method call"). Der Browser-Speicher reicht für Filme ohnehin nicht,

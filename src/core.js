@@ -68,6 +68,12 @@
       var episode = parseInt(m[2], 10);
       if (!isNaN(season) && !isNaN(episode)) {
         var seriesName = trimDecorations(name.substring(0, m.index));
+        if (!seriesName) {
+          // Steht die Folgenkennung vorn („S01E01 - Pilot"), ist der Titel
+          // dahinter. Auf den Gruppennamen auszuweichen ließ früher tausende
+          // Einträge zu einer einzigen „Serie" verschmelzen.
+          seriesName = trimDecorations(name.substring(m.index + m[0].length));
+        }
         if (!seriesName) seriesName = group;
         return { kind: 'episode', seriesName: seriesName, season: season, episode: episode };
       }
@@ -80,7 +86,10 @@
     var isSeries = ['serie', 'series', 'show', 'staffel', 'season'].some(function (k) {
       return lowerGroup.indexOf(k) >= 0;
     });
-    if (VIDEO_EXTENSIONS.indexOf(ext) >= 0 || isVOD) {
+    // `isSeries` muss den Zweig selbst öffnen können: Xtream-Serien-URLs haben
+    // oft gar keine Endung (…/series/user/pass/12345) und die Gruppe heißt nur
+    // „SERIEN | …" – solche Einträge landeten allesamt im Live-TV.
+    if (VIDEO_EXTENSIONS.indexOf(ext) >= 0 || isVOD || isSeries) {
       if (isSeries) return { kind: 'episode', seriesName: name, season: 1, episode: 1 };
       return { kind: 'movie' };
     }
@@ -90,7 +99,14 @@
   /** M3U/M3U8 einlesen → { channels, movies, series }. */
   function parseM3U(text, sourceID) {
     var result = { channels: [], movies: [], series: [] };
-    var seriesByName = {};
+    /*
+     * Schlüssel kommen aus der Playlist und können auf Prototyp-Eigenschaften
+     * treffen: Eine Serie namens „Constructor" lieferte beim Nachschlagen
+     * `Object.prototype.constructor` – der Anlegen-Zweig wurde übersprungen und
+     * der Import brach mit einem TypeError komplett ab. Mit einem Objekt ohne
+     * Prototyp kann das nicht passieren.
+     */
+    var seriesByName = Object.create(null);
     var seriesOrder = [];
     var currentName = '';
     var currentAttributes = {};
@@ -98,7 +114,15 @@
     var lines = text.split(/\r\n|\r|\n/);
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].replace(/^[\s﻿]+/, '').replace(/[\s﻿]+$/, '');
-      if (!line || line === '#EXTM3U' || line.indexOf('#EXTM3U ') === 0) continue;
+      if (line.indexOf('#EXTM3U') === 0) {
+        // Die Kopfzeile trägt bei fast jeder Playlist die EPG-Adresse
+        // (url-tvg / x-tvg-url) – ohne sie blieb der Programmführer bei
+        // M3U-Quellen dauerhaft leer.
+        var head = parseAttributes(line);
+        result.epgURL = head['url-tvg'] || head['x-tvg-url'] || null;
+        continue;
+      }
+      if (!line) continue;
 
       if (line.indexOf('#EXTINF') === 0) {
         var comma = displayNameIndex(line);
@@ -288,6 +312,7 @@
    */
   function parseEpisodes(info, host, user, pass, seriesID) {
     var out = [];
+    var perSeason = {};
     if (!info || !info.episodes) return out;
     var container = info.episodes;
 
@@ -303,11 +328,19 @@
         var ext = str(node.container_extension) || 'mp4';
         var url = host + '/series/' + encodeURIComponent(user) + '/' + encodeURIComponent(pass) + '/' + id + '.' + ext;
         var infoNode = node.info || {};
+        var staffel = num(node.season) !== null ? num(node.season) : (seasonHint || 1);
+        var nummer = num(node.episode_num);
+        if (nummer === null) {
+          // Ersatznummer JE STAFFEL: Fortlaufend über alle Folgen ergab sonst
+          // S01E01–E10 gefolgt von S02E11.
+          perSeason[staffel] = (perSeason[staffel] || 0) + 1;
+          nummer = perSeason[staffel];
+        }
         out.push({
           id: seriesID + '|' + url,
           title: str(node.title) || str(infoNode.name) || ('Folge ' + id),
-          season: num(node.season) !== null ? num(node.season) : (seasonHint || 1),
-          episode: num(node.episode_num) || out.length + 1,
+          season: staffel,
+          episode: nummer,
           streamURL: url,
           imageURL: str(infoNode.movie_image),
           durationSeconds: num(infoNode.duration_secs),
@@ -372,20 +405,50 @@
     return list.sort(function (a, b) { return b.alias.length - a.alias.length; });
   })();
 
+  /*
+   * Nachschlagewerk für Ein-Wort-Aliase und die Liste der mehrteiligen.
+   *
+   * Vorher lief je Titel die ganze Aliasliste (~110 Einträge) mit einem
+   * `indexOf` über die Tokens – bei 142.000 Filmen sind das Millionen von
+   * Array-Suchen. Jetzt kostet ein Titel nur noch so viel wie er Wörter hat.
+   */
+  var ALIAS_MAP = Object.create(null);
+  var MULTI_ALIASES = [];
+  var SPECIAL_ALIASES = [];
+  (function () {
+    for (var i = 0; i < SORTED_ALIASES.length; i++) {
+      var e = SORTED_ALIASES[i];
+      if (e.alias.indexOf(' ') >= 0) MULTI_ALIASES.push(e);
+      else if (/[^a-z0-9\u00C0-\u024F]/.test(e.alias)) SPECIAL_ALIASES.push(e);
+      // Längere Aliase gewinnen: Sie stehen vorn und werden nicht überschrieben.
+      else if (ALIAS_MAP[e.alias] === undefined) ALIAS_MAP[e.alias] = e.code;
+    }
+  })();
+
   function detectLanguage(text) {
     var lower = (text || '').toLowerCase();
+    // Mehrteilige Aliase zuerst: „great britain" darf nicht an „britain" scheitern.
+    for (var m = 0; m < MULTI_ALIASES.length; m++) {
+      if (lower.indexOf(MULTI_ALIASES[m].alias) >= 0) return MULTI_ALIASES[m].code;
+    }
+    // Aliase mit Sonderzeichen ebenfalls als Teilzeichenkette prüfen: „18+"
+    // zerfällt bei der Tokenisierung zu „18" und wurde nie erkannt.
+    for (var x = 0; x < SPECIAL_ALIASES.length; x++) {
+      if (lower.indexOf(SPECIAL_ALIASES[x].alias) >= 0) return SPECIAL_ALIASES[x].code;
+    }
     // Kein \p{L} (Unicode-Property-Escapes gibt es erst ab Chrome 64, ältere
     // webOS-Fernseher liegen darunter): Latin-1-Bereich explizit zulassen.
-    var tokens = lower.split(/[^a-z0-9\u00C0-\u024F]+/).filter(Boolean);
-    for (var i = 0; i < SORTED_ALIASES.length; i++) {
-      var entry = SORTED_ALIASES[i];
-      if (entry.alias.indexOf(' ') >= 0) {
-        if (lower.indexOf(entry.alias) >= 0) return entry.code;
-      } else if (tokens.indexOf(entry.alias) >= 0) {
-        return entry.code;
+    var tokens = lower.split(/[^a-z0-9\u00C0-\u024F]+/);
+    var best = null, bestLen = 0;
+    for (var i = 0; i < tokens.length; i++) {
+      var t = tokens[i];
+      if (!t) continue;
+      if (Object.prototype.hasOwnProperty.call(ALIAS_MAP, t) && t.length > bestLen) {
+        // Längster Treffer gewinnt – „german" schlägt „ger".
+        best = ALIAS_MAP[t]; bestLen = t.length;
       }
     }
-    return null;
+    return best;
   }
 
   /**
@@ -396,13 +459,27 @@
   function filterByLanguage(playlist, preferred, strict) {
     if (!preferred || !preferred.length) return playlist;
 
+    // Auswahl als Nachschlagewerk statt indexOf je Element.
+    var wanted = {};
+    for (var w = 0; w < preferred.length; w++) wanted[preferred[w]] = true;
+
     function filterItems(items, textOf) {
-      var detectable = items.some(function (it) { return detectLanguage(textOf(it)) !== null; });
+      // Sprache je Element EINMAL bestimmen und am Element merken – vorher lief
+      // die Erkennung zweimal über die gesamte Liste (einmal für die Prüfung
+      // „ist überhaupt etwas erkennbar", einmal zum Filtern).
+      var detectable = false;
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (it._lang === undefined) it._lang = detectLanguage(textOf(it));
+        if (it._lang !== null) detectable = true;
+      }
       if (!detectable) return items;
-      return items.filter(function (it) {
-        var d = detectLanguage(textOf(it));
-        return (d !== null && preferred.indexOf(d) >= 0) || (!strict && d === null);
-      });
+      var out = [];
+      for (var j = 0; j < items.length; j++) {
+        var x = items[j];
+        if ((x._lang !== null && wanted[x._lang]) || (!strict && x._lang === null)) out.push(x);
+      }
+      return out;
     }
 
     return {
@@ -435,8 +512,20 @@
     return new Date(year, month, day, hour, minute, second);
   }
 
-  function parseXMLTV(xmlText) {
-    var epg = {};
+  function parseXMLTV(xmlText, wantedIds) {
+    // Ohne Prototyp: Eine tvg-id namens „constructor" ließ den Aufbau sonst
+    // mit einem TypeError abbrechen – und das gesamte EPG verschwand stumm.
+    var epg = Object.create(null);
+    // Nur Kanäle behalten, die es in der Bibliothek gibt: XMLTV-Dateien großer
+    // Anbieter sind dreistellige Megabyte, und jede Sendung kostet zwei
+    // Date-Objekte. Ohne die Beschränkung geht dem Fernseher der Speicher aus.
+    var filter = null;
+    if (wantedIds) {
+      filter = Object.create(null);
+      for (var f = 0; f < wantedIds.length; f++) {
+        if (wantedIds[f]) filter[String(wantedIds[f]).toLowerCase()] = true;
+      }
+    }
     var now = Date.now();
     var from = now - 8 * 3600 * 1000;
     var to = now + 72 * 3600 * 1000;
@@ -456,6 +545,7 @@
       if (stop.getTime() < from || start.getTime() > to) continue;
       var channel = (p.getAttribute('channel') || '').toLowerCase();
       if (!channel) continue;
+      if (filter && !filter[channel]) continue;
       // Bei mehrsprachigen <title>/<desc> nur die erste Fassung nehmen.
       var titleNode = p.getElementsByTagName('title')[0];
       var descNode = p.getElementsByTagName('desc')[0];

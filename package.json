@@ -1,0 +1,14 @@
+{
+  "name": "glasstv-webos",
+  "version": "1.8.0",
+  "private": true,
+  "description": "GlassTV für LG-Fernseher (webOS) – IPTV-Player, der eigene Playlisten abspielt.",
+  "scripts": {
+    "test": "node test/core.test.js && node test/ui.test.js",
+    "package": "ares-package src -o .",
+    "install-tv": "./install.sh"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
