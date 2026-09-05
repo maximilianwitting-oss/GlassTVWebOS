@@ -218,7 +218,9 @@ main::-webkit-scrollbar { width: 0; }
 
 /* Breite Karte (Weiterschauen / Jetzt im TV): 16:9 */
 .card.wide { width: 356px; }
-.card.wide .poster { padding-top: 56.25%; background: rgba(255,255,255,0.04); }
+/* Die Themeflaeche stehen lassen: `rgba(255,255,255,0.04)` war auf hellen
+   Designs unsichtbar (1,00:1), das ▶-Zeichen schwebte frei. */
+.card.wide .poster { padding-top: 56.25%; }
 /* Senderlogos sind keine Poster: vollständig zeigen, nicht beschneiden. */
 .card.wide .poster img { object-fit: contain; padding: 14px; }
 .card.wide .sub {
@@ -272,6 +274,9 @@ main::-webkit-scrollbar { width: 0; }
   height: 6px; background: rgba(127, 127, 127, 0.28);
   border-radius: 2px; margin-top: 8px; overflow: hidden;
 }
+/* Auf Karten einruecken: Sonst lief der Balken von Kante zu Kante unter
+   eingeruecktem Text, und die Kartenrundung schnitt seine Enden zu Keilen. */
+.card .progress { margin: 0 14px 4px; }
 .progress > div { height: 100%; background: #8c80f7; background: var(--accent); }
 
 /*
@@ -305,6 +310,7 @@ main::-webkit-scrollbar { width: 0; }
 }
 .chip.active {
   background: rgba(127, 127, 127, 0.18);
+  background: var(--accent-dim);
   color: #eae7f2; color: var(--text); font-weight: 600;
   box-shadow: inset 0 -3px 0 #8c80f7;
   box-shadow: inset 0 -3px 0 var(--accent);
@@ -369,12 +375,40 @@ main::-webkit-scrollbar { width: 0; }
   margin-bottom: 16px;
 }
 
+/*
+ * Farbtasten-Legende. Die drei Tasten sind sonst nirgends erklaert und damit
+ * praktisch unauffindbar.
+ */
+.farbtasten { margin: 34px 4px 8px; opacity: 0.75; }
+.farbtaste {
+  display: inline-block; margin-right: 26px; font-size: 18px;
+  color: #a9a4bd; color: var(--text-dim);
+}
+.farbtaste .punkt {
+  display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+  margin-right: 8px; vertical-align: baseline;
+}
+.farbtaste .punkt.gruen { background: #3ec96b; }
+.farbtaste .punkt.gelb { background: #f2c53d; }
+.farbtaste .punkt.blau { background: #4f9bff; }
+
 /* Schmale Statuszeile im Suchbildschirm – siehe indexHinweis(). */
+/* Statuszeile mit Knopf daneben – siehe indexHinweis(). */
+.such-status-zeile { margin-bottom: 20px; }
+.such-status-zeile .such-status { display: inline-block; margin: 0 16px 0 4px; }
+
 .such-status {
   font-size: 17px;
   color: #a9a4bd; color: var(--text-dim);
   margin: 0 0 20px 4px;
 }
+
+/*
+ * Platzhalter. `::placeholder` gibt es erst ab Chrome 57 – auf webOS 4 zaehlt
+ * nur die alte Schreibweise. Ohne sie greift die UA-Vorgabe, die auf dunklen
+ * Designs bei rund 3,4:1 liegt.
+ */
+input::-webkit-input-placeholder { color: #a9a4bd; color: var(--text-dim); opacity: 1; }
 
 label { display: block; font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin: 14px 0 6px; }
 
@@ -500,7 +534,6 @@ button.ghost {
 .gate-profile {
   display: inline-block; vertical-align: top; margin: 0 22px;
   padding: 20px; border-radius: 20px; cursor: pointer;
-  border: 2px solid transparent;
   -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
 }
 
@@ -509,7 +542,7 @@ button.ghost {
  * rechteckigen Container – am Kreis ist er sofort zu sehen, am unsichtbaren
  * Kasten drumherum kaum.
  */
-.gate-profile.focusable:focus { box-shadow: none; border-color: transparent; }
+.gate-profile.focusable:focus { box-shadow: none; }
 .gate-profile.focusable:focus .gate-avatar {
   box-shadow: 0 0 0 6px #8c80f7, 0 10px 34px rgba(0, 0, 0, 0.6);
   box-shadow: 0 0 0 6px var(--accent), 0 10px 34px rgba(0, 0, 0, 0.6);
@@ -575,6 +608,13 @@ button.ghost {
  * und hebelte sie sonst aus – breite Zeilen skalierten doch, und auf „Wer
  * schaut?" erschienen zwei Ringe uebereinander.
  */
+/*
+ * Wie `.channel`: Ein ueber die volle Breite laufendes Eingabefeld erzeugt
+ * beim Skalieren waagerechtes Scrollen, und der Ring legt sich ueber sein
+ * Label. Textfelder werden deshalb nicht vergroessert.
+ */
+input.focusable:focus, .search.focusable:focus { transform: none; }
+
 body.zeiger .channel.focusable:focus { transform: none; }
 body.zeiger .gate-profile.focusable:focus { box-shadow: none; }
 
