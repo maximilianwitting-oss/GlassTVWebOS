@@ -36,6 +36,7 @@
     lazyKatalog: false,
     katWahl: { movies: null, series: null },
     katSuche: { m: '', s: '' },
+    authFehler: null,       // haelt den Einrichtungsbildschirm offen
     filmIndex: null,        // schlanker Titelindex, nur auf Wunsch
     indexLaedt: false,
     vodKategorien: [],      // [{ id, name }]
@@ -1220,7 +1221,7 @@
       return;
     }
     if (state.gate) { renderGate(); setTimeout(focusFirst, 0); return; }
-    if (!state.source) { renderSetup(); return; }
+    if (!state.source || state.authFehler) { renderSetup(); return; }
 
     if (state.view) {
       if (state.view.type === 'movie') renderMovieDetail(state.view.item);
@@ -1960,7 +1961,12 @@
     el.content.appendChild(panel);
 
     var q = (state.view.query || '').toLowerCase();
-    if (q.length < 2) return;
+    if (q.length < 2) {
+      // Der Knopf fuer das Titelverzeichnis gehoert hierher, nicht erst hinter
+      // eine magere Trefferliste – so laesst er sich vor der Suche vorbereiten.
+      if (state.lazyKatalog) el.content.appendChild(indexHinweis());
+      return;
+    }
 
     // Suche mit Abbruch bei 30 Treffern statt drei Voll-Scans über 215.000
     // Titel mit je einem neuen Kleinbuchstaben-String.
@@ -2594,6 +2600,11 @@
     var saved = load('source', null);
     var panel = element('div', 'panel');
     panel.appendChild(element('h2', null, 'Quelle einrichten'));
+    if (state.authFehler) {
+      panel.appendChild(element('p', 'fehler',
+        'Anmeldung fehlgeschlagen: ' + state.authFehler + '. Bitte Zugangsdaten ' +
+        'pruefen – bei abgelaufenem Zugang nennt der Anbieter neue.'));
+    }
     panel.appendChild(element('p', null,
       'GlassTV spielt deine eigene Playlist ab – Xtream Codes oder M3U. ' +
       'Die Zugangsdaten bleiben auf diesem Fernseher.'));
@@ -2758,6 +2769,7 @@
   }
 
   function loadXtreamSource(host, user, pass) {
+    state.authFehler = null;
     state.loading = true;
     state.loadingStep = 'Anmeldung wird geprüft …';
     render();
@@ -2789,7 +2801,15 @@
     function finish() {
       state.loading = false;
       state.loadingStep = null;
-      if (authError) { render(); return toast('Anmeldung fehlgeschlagen: ' + authError.message, 8000); }
+      if (authError) {
+        // Dauerhaft merken: Ein Hinweis verschwindet nach acht Sekunden und
+        // laesst den Nutzer vor „nichts geladen" sitzen – etwa wenn das Abo
+        // abgelaufen ist oder das Panel das Passwort geaendert hat.
+        state.authFehler = authError.message;
+        render();
+        return toast('Anmeldung fehlgeschlagen: ' + authError.message, 8000);
+      }
+      state.authFehler = null;
       state.source = { kind: 'xtream', host: host, user: user, pass: pass };
       save('source', state.source);
       state.lazyKatalog = true;

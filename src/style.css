@@ -319,6 +319,20 @@ main::-webkit-scrollbar { width: 0; }
 .panel h2 { font-size: 28px; margin-bottom: 8px; }
 .panel p { color: #a9a4bd; color: var(--text-dim); margin-bottom: 18px; line-height: 1.45; }
 
+/*
+ * Fehlermeldung der Anmeldung. Bewusst mit eigener Flaeche statt nur roter
+ * Schrift: Auf hellen Designs ist reines Rot auf Weiss schlecht lesbar, und
+ * die Meldung soll aus zwei Metern Abstand auffallen.
+ */
+.panel p.fehler {
+  color: #b3261e;
+  background: rgba(179, 38, 30, 0.10);
+  border: 2px solid rgba(179, 38, 30, 0.45);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
 label { display: block; font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin: 14px 0 6px; }
 
 input {

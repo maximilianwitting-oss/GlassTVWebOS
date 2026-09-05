@@ -13,7 +13,7 @@
   "supportPortraitMode": false,
   "appDescription": "Spielt deine eigenen IPTV-Playlisten ab – Xtream Codes oder M3U.",
   "resolution": "1920x1080",
-  "requiredMemory": 384,
+  "requiredMemory": 320,
   "handlesRelaunch": true,
   "vendorUrl": "https://witting.info"
 }
