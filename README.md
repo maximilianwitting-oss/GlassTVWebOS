@@ -41,7 +41,15 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   *geometrisch* (nicht in DOM-Reihenfolge), damit Raster und Reihen sich
   räumlich anfühlen. Farbtasten: grün = Guide, gelb = Suche, blau = Favorit.
 
-Nicht enthalten: Statistik, Downloads, Mini-Player.
+- **Statistik**: Sehzeit, zu Ende gesehen, Tage am Stück, verschiedene Sender,
+  Wochenübersicht und Top-Kategorien (Einstellungen → Statistik). Gezählt
+  werden **Titel je Tag**, keine erfundenen Minuten – ein Verlaufseintrag trägt
+  nur einen Stand, eine echte Sehzeit je Tag gibt er nicht her.
+- **Mini-Ansicht**: Zurück im Player legt die Wiedergabe in die rechte untere
+  Ecke, man kann weiterstöbern; OK darauf blendet wieder auf, die Stop-Taste
+  beendet. Siehe Einschränkung unten – dort läuft nur der **Ton** weiter.
+
+Nicht enthalten: Downloads (auf dem Gerät nicht möglich, siehe unten).
 
 ## Was auf dem Gerät gilt
 
@@ -58,6 +66,18 @@ Nicht enthalten: Statistik, Downloads, Mini-Player.
   ist schwarz, obwohl auf dem Schirm das Bild steht.
 - **Große Listen** werden bewusst gedeckelt (120 Senderzeilen, 150 Kacheln,
   Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst ein.
+- **Kein Bild im Mini-Player.** Das Video liegt auf einer Hardware-Ebene, die
+  sich nicht verkleinern lässt: Schrumpft man das `<video>` per CSS, läuft der
+  Ton weiter und das Bild bleibt schwarz. Die naheliegende Abhilfe – die
+  Videoebene über `luna://com.webos.media/setDisplayWindow` verschieben – gibt
+  es auf webOS 4 nicht (auf dem Gerät geprüft, ebenso zwei Alternativpfade).
+  Deshalb deckt die Mini-Ansicht das Feld bewusst mit dem Cover ab und sagt
+  „♪ Ton läuft weiter", statt einen schwarzen Kasten zu zeigen.
+- **Downloads sind nicht möglich.** `luna://com.webos.service.downloadmanager`
+  existiert, lehnt den Aufruf für selbstgebaute Apps aber ab
+  („Denied method call"). Der Browser-Speicher reicht für Filme ohnehin nicht,
+  und am dauerhaft vernetzten Fernseher bringt Offline wenig. Die Einstellungen
+  sagen das offen, statt einen Knopf anzubieten, der nichts tut.
 
 ## Warum ES5-Stil
 

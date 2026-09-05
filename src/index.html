@@ -23,6 +23,20 @@
 
   <div id="player">
     <video id="video" preload="none"></video>
+    <!--
+      Mini-Ansicht: Der Fernseher rendert Video auf einer Hardware-Ebene, die
+      sich weder per CSS noch über eine erreichbare Luna-API verkleinern lässt
+      (auf dem Gerät geprüft: setDisplayWindow gibt es dort nicht). Verkleinert
+      man nur das <video>, läuft der TON weiter, das BILD bleibt schwarz.
+      Deshalb deckt die Mini-Ansicht das Videofeld bewusst mit dem Cover ab und
+      sagt klar, dass gerade nur der Ton läuft.
+    -->
+    <div id="mini-cover">
+      <img id="mini-image" alt="">
+      <div id="mini-note">♪ Ton läuft weiter</div>
+    </div>
+    <div id="mini-hit" class="focusable" tabindex="0"></div>
+    <div id="mini-bar"><span id="mini-title"></span></div>
     <div id="player-chrome">
       <div>
         <div id="player-title"></div>

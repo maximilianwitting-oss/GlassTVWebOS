@@ -524,6 +524,141 @@
     el.content.appendChild(wrap);
   }
 
+
+  // -------------------------------------------------------- Statistik ----
+
+  /**
+   * Auswertung des Verlaufs (wie iOS/Android).
+   *
+   * WAS EHRLICH GEHT – und was nicht: Ein Eintrag trägt je Titel genau EINEN
+   * Stand und EINEN Zeitpunkt. Eine echte Sehzeit JE TAG gibt das nicht her
+   * (wer einen Film Montag beginnt und Dienstag beendet, hinterlässt einen
+   * Dienstags-Eintrag mit voller Position). Die Wochengrafik zählt deshalb
+   * TITEL je Tag. Live-Sender liefern gar keine Laufzeit und zählen nur dort mit.
+   */
+  function computeStats() {
+    var entries = progressList();
+    var out = {
+      count: entries.length, vodSeconds: 0, finished: 0, channels: 0,
+      streak: 0, days: [], groups: [], longest: null, longestSeconds: 0,
+    };
+    var dayCounts = {}, groupCounts = {};
+
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var d = new Date(e.updatedAt);
+      var key = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+      dayCounts[key] = (dayCounts[key] || 0) + 1;
+      if (e.group) groupCounts[e.group] = (groupCounts[e.group] || 0) + 1;
+      if (e.kind === 'live') { out.channels++; continue; }
+      // Position bei bekannter Laufzeit deckeln – Rundungsreste sonst darüber.
+      var secs = e.duration > 0 ? Math.min(e.position, e.duration) : e.position;
+      out.vodSeconds += secs;
+      if (e.duration > 0 && (e.position / e.duration) >= 0.95) out.finished++;
+      if (secs > out.longestSeconds) { out.longestSeconds = secs; out.longest = e.title; }
+    }
+
+    // Letzte sieben Tage, älteste zuerst.
+    var today = new Date();
+    for (var back = 6; back >= 0; back--) {
+      var dd = new Date(today.getFullYear(), today.getMonth(), today.getDate() - back);
+      var k = dd.getFullYear() + '-' + (dd.getMonth() + 1) + '-' + dd.getDate();
+      out.days.push({ date: dd, count: dayCounts[k] || 0 });
+    }
+
+    // Tage am Stück (heute oder gestern als Start).
+    var cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    var todayKey = cursor.getFullYear() + '-' + (cursor.getMonth() + 1) + '-' + cursor.getDate();
+    if (!dayCounts[todayKey]) cursor.setDate(cursor.getDate() - 1);
+    while (true) {
+      var ck = cursor.getFullYear() + '-' + (cursor.getMonth() + 1) + '-' + cursor.getDate();
+      if (!dayCounts[ck]) break;
+      out.streak++;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    var pairs = [];
+    for (var g in groupCounts) {
+      if (Object.prototype.hasOwnProperty.call(groupCounts, g)) pairs.push({ name: g, count: groupCounts[g] });
+    }
+    pairs.sort(function (a, b) { return b.count - a.count; });
+    out.groups = pairs.slice(0, 5);
+    return out;
+  }
+
+  var WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+
+  function renderStats() {
+    el.content.appendChild(backButton());
+    var st = computeStats();
+
+    if (!st.count) {
+      return renderEmpty('Noch keine Statistik',
+        'Sobald du etwas ansiehst, entstehen hier Wochenübersicht, Gesamtzeiten ' +
+        'und Top-Kategorien.');
+    }
+
+    var tiles = element('div', 'stat-row');
+    function tile(value, label) {
+      var t = element('div', 'stat-tile');
+      t.appendChild(element('div', 'stat-value', value));
+      t.appendChild(element('div', 'stat-label', label));
+      return t;
+    }
+    var hours = Math.floor(st.vodSeconds / 3600);
+    tiles.appendChild(hours >= 1
+      ? tile(String(hours), 'Stunden gesehen')
+      : tile(String(Math.floor(st.vodSeconds / 60)), 'Minuten gesehen'));
+    tiles.appendChild(tile(String(st.finished), 'Zu Ende gesehen'));
+    tiles.appendChild(tile(String(st.streak), 'Tage am Stück'));
+    tiles.appendChild(tile(String(st.channels), 'Verschiedene Sender'));
+    el.content.appendChild(tiles);
+
+    el.content.appendChild(element('div', 'section-title', 'Diese Woche'));
+    var max = 1;
+    for (var i = 0; i < st.days.length; i++) max = Math.max(max, st.days[i].count);
+    var week = element('div', 'week');
+    for (var j = 0; j < st.days.length; j++) {
+      (function (day) {
+        var col = element('div', 'week-day');
+        col.appendChild(element('div', 'week-count', day.count ? String(day.count) : ''));
+        var bar = element('div', 'week-bar' + (day.count ? ' on' : ''));
+        // Mindesthöhe, damit leere Tage als Spur sichtbar bleiben.
+        bar.style.height = (14 + Math.round(96 * day.count / max)) + 'px';
+        col.appendChild(bar);
+        col.appendChild(element('div', 'week-label', WEEKDAYS[day.date.getDay()]));
+        week.appendChild(col);
+      })(st.days[j]);
+    }
+    el.content.appendChild(week);
+    el.content.appendChild(element('div', 'detail-meta',
+      'Gezählt werden Titel je Tag – Sender liefern keine Laufzeit, zählen aber mit.'));
+
+    if (st.groups.length) {
+      el.content.appendChild(element('div', 'section-title', 'Top-Kategorien'));
+      var top = st.groups[0].count || 1;
+      for (var k = 0; k < st.groups.length; k++) {
+        (function (g) {
+          var line = element('div', 'bar-line');
+          line.appendChild(element('div', 'bar-head', g.name + '   ·   ' + g.count));
+          var track = element('div', 'bar-track');
+          var fill = element('div', 'bar-fill');
+          fill.style.width = Math.round((g.count / top) * 100) + '%';
+          track.appendChild(fill);
+          line.appendChild(track);
+          el.content.appendChild(line);
+        })(st.groups[k]);
+      }
+    }
+
+    el.content.appendChild(element('div', 'section-title', 'Gesamt'));
+    el.content.appendChild(element('div', 'detail-meta', st.count + ' Einträge im Verlauf'));
+    if (st.longest) {
+      el.content.appendChild(element('div', 'detail-meta',
+        'Weitester Fortschritt: ' + st.longest + ' (' + durationText(st.longestSeconds) + ')'));
+    }
+  }
+
   // ----------------------------------------------------------- Seiten ----
 
   function render() {
@@ -540,6 +675,7 @@
       else if (state.view.type === 'guide') renderGuide();
       else if (state.view.type === 'search') renderSearch();
       else if (state.view.type === 'settings') renderSettings();
+      else if (state.view.type === 'stats') renderStats();
     } else if (state.tab === 'home') renderHome();
     else if (state.tab === 'live') renderChannels();
     else if (state.tab === 'movies') renderMovies();
@@ -1147,12 +1283,24 @@
       ? ('Aktuelle Quelle: ' + (src.kind === 'xtream' ? src.host : src.m3u))
       : 'Keine Quelle eingerichtet.'));
 
+    // Downloads sind auf diesem Gerät nicht möglich – das gehört gesagt,
+    // statt einen Knopf anzubieten, der nichts tut.
+    panel.appendChild(element('div', 'section-title', 'Downloads'));
+    panel.appendChild(element('p', null,
+      'Auf dem Fernseher nicht verfügbar: LG lässt den Download-Dienst nur für ' +
+      'signierte Apps zu (geprüft – der Aufruf wird abgelehnt), und der Browser-' +
+      'Speicher reicht für Filme ohnehin nicht. Am Fernseher, der ohnehin am Netz ' +
+      'hängt, bringt Offline auch wenig – auf iPhone und Quest gibt es die Funktion.'));
+
     panel.appendChild(element('div', 'section-title', 'Bibliothek'));
     panel.appendChild(element('p', null,
       state.library.channels.length + ' Sender · ' + state.library.movies.length +
       ' Filme · ' + state.library.series.length + ' Serien'));
 
     var actions = element('div', 'actions');
+    actions.appendChild(button('Statistik', function () {
+      state.view = { type: 'stats' }; render();
+    }, true));
     actions.appendChild(button('Neu laden', function () {
       state.view = null;
       reloadSource();
@@ -1620,6 +1768,7 @@
 
   var player = {
     open: false,
+    minimized: false,
     kind: null,
     id: null,
     title: '',
@@ -1637,6 +1786,8 @@
   function playItem(title, url, subtitle, kind, id, resumeSeconds, context, meta) {
     player.meta = meta || {};
     player.open = true;
+    player.minimized = false;
+    el.player.className = 'open';
     player.kind = kind;
     player.id = id;
     player.title = title;
@@ -1703,13 +1854,48 @@
     saveScoped('progress', state.progress);
   }
 
+  /**
+   * Wiedergabe in die kleine Ecke legen und weiterstöbern.
+   *
+   * WICHTIG (auf dem Gerät geprüft): Der Fernseher rendert Video auf einer
+   * Hardware-Ebene, die sich nicht verkleinern lässt – weder per CSS noch über
+   * eine erreichbare Luna-API (`setDisplayWindow` existiert auf webOS 4 nicht,
+   * der DownloadManager ist für Dev-Apps gesperrt). Verkleinert man nur das
+   * <video>, läuft der Ton weiter und das Bild bleibt schwarz. Deshalb wird
+   * das Videofeld hier bewusst mit dem Cover abgedeckt und beschriftet.
+   */
+  function minimizePlayer() {
+    if (!player.open) return;
+    player.minimized = true;
+    el.player.className = 'open mini';
+    el.miniTitle.textContent = player.title;
+    if (player.meta && player.meta.image) {
+      el.miniImage.src = player.meta.image;
+      el.miniImage.style.display = '';
+    } else {
+      el.miniImage.removeAttribute('src');
+      el.miniImage.style.display = 'none';
+    }
+    render();
+  }
+
+  function expandPlayer() {
+    if (!player.open) return;
+    player.minimized = false;
+    el.player.className = 'open';
+    pokeChrome();
+    setTimeout(function () { el.video.focus(); }, 0);
+  }
+
   function closePlayer() {
+    player.minimized = false;
     if (el.video.duration && isFinite(el.video.duration)) {
       saveProgress(el.video.currentTime || 0, el.video.duration);
     }
     player.open = false;
     if (player.tickTimer) { clearInterval(player.tickTimer); player.tickTimer = null; }
     el.player.className = '';
+    el.miniImage.removeAttribute('src');
     el.video.pause();
     el.video.removeAttribute('src');
     el.video.load();
@@ -1760,9 +1946,19 @@
   function onKey(e) {
     var code = e.keyCode;
 
-    if (player.open) {
+    // In der Mini-Ansicht gilt die normale Navigation – nur OK auf der
+    // Mini-Karte und die Stop-Taste sind belegt.
+    if (player.open && player.minimized) {
+      if (code === 413) { closePlayer(); e.preventDefault(); return; }
+      if (code === 13 && document.activeElement === el.miniHit) {
+        expandPlayer(); e.preventDefault(); return;
+      }
+      // sonst: durchfallen zur normalen Navigation
+    } else if (player.open) {
       pokeChrome();
-      if (code === 461 || code === 8 || code === 27 || code === 413) { closePlayer(); e.preventDefault(); return; }
+      // Zurück legt die Wiedergabe in die Ecke, statt sie abzuwürgen.
+      if (code === 461 || code === 8 || code === 27) { minimizePlayer(); e.preventDefault(); return; }
+      if (code === 413) { closePlayer(); e.preventDefault(); return; }
       if (code === 13 || code === 415 || code === 19) {
         if (el.video.paused) el.video.play(); else el.video.pause();
         e.preventDefault(); return;
@@ -1823,6 +2019,9 @@
       scrubFill: document.getElementById('player-scrub-fill'),
       times: document.getElementById('player-times'),
       toast: document.getElementById('toast'),
+      miniHit: document.getElementById('mini-hit'),
+      miniTitle: document.getElementById('mini-title'),
+      miniImage: document.getElementById('mini-image'),
       search: document.getElementById('btn-search'),
       guide: document.getElementById('btn-guide'),
       settings: document.getElementById('btn-settings'),
@@ -1863,6 +2062,8 @@
     el.video.addEventListener('ended', function () {
       if (!playNextEpisode()) closePlayer();
     });
+
+    el.miniHit.onclick = function () { expandPlayer(); };
 
     document.addEventListener('keydown', onKey);
 
