@@ -37,6 +37,7 @@
     katWahl: { movies: null, series: null },
     katSuche: { m: '', s: '' },
     authFehler: null,       // haelt den Einrichtungsbildschirm offen
+    authIstNetz: false,     // Netzaussetzer statt abgelehnter Anmeldung
     filmIndex: null,        // schlanker Titelindex, nur auf Wunsch
     indexLaedt: false,
     vodKategorien: [],      // [{ id, name }]
@@ -159,14 +160,24 @@
 
   function focusFirst() {
     collectFocusables();
-    var inContent = [], ersteEingabe = null;
+    var inContent = [], ersteEingabe = null, erstziel = null;
     for (var i = 0; i < focusables.length; i++) {
       if (!el.content.contains(focusables[i])) continue;
       /*
-       * Textfelder werden beim automatischen Erstfokus uebersprungen: Bekommt
-       * ein Feld den Fokus, klappt webOS die Bildschirmtastatur auf und
+       * Eine Ansicht mit einem klaren Hauptziel markiert es mit `data-erstziel`
+       * und bekommt den Fokus dorthin – auf der Detailseite „Abspielen", im
+       * Suchbildschirm das Eingabefeld. Ohne das landete der Fokus auf dem
+       * Zurueck-Knopf, und man musste sich zum eigentlichen Zweck der Seite
+       * erst hinunternavigieren.
+       */
+      if (!erstziel && focusables[i].getAttribute('data-erstziel')) {
+        erstziel = focusables[i];
+      }
+      /*
+       * Textfelder werden sonst beim automatischen Erstfokus uebersprungen:
+       * Bekommt ein Feld den Fokus, klappt webOS die Bildschirmtastatur auf und
        * verdeckt die halbe Seite – bei der Kategorienliste passierte das nach
-       * jedem Zurueckkehren. Wer suchen will, waehlt das Feld selbst an.
+       * jedem Zurueckkehren. Wer dort suchen will, waehlt das Feld selbst an.
        */
       if (focusables[i].tagName === 'INPUT' || focusables[i].tagName === 'TEXTAREA') {
         if (!ersteEingabe) ersteEingabe = focusables[i];
@@ -174,7 +185,7 @@
       }
       inContent.push(focusables[i]);
     }
-    var target = inContent.length ? inContent[0] : (ersteEingabe || focusables[0]);
+    var target = erstziel || (inContent.length ? inContent[0] : (ersteEingabe || focusables[0]));
     if (target) { target.focus(); revealFocus(target); }
   }
 
@@ -393,8 +404,13 @@
    * Index: Nach dem Aufbau kann die Liste anders lang sein.
    */
   var pendingFocusKey = null;
+  var focusWunsch = null;   // schlaegt beim naechsten Aufbau den gemerkten Fokus
+
+  /** Fokus fuer den naechsten Aufbau vorgeben (z. B. beim Verlassen einer Ebene). */
+  function focusWuenschen(key) { focusWunsch = key; }
 
   function rememberFocus() {
+    if (focusWunsch) { pendingFocusKey = focusWunsch; focusWunsch = null; return; }
     var a = document.activeElement;
     pendingFocusKey = (a && a.getAttribute) ? a.getAttribute('data-fkey') : null;
   }
@@ -447,9 +463,13 @@
     return box;
   }
 
-  function card(title, imageUrl, onSelect, wide) {
+  function card(title, imageUrl, onSelect, wide, fkey) {
     var c = element('div', 'card focusable' + (wide ? ' wide' : ''));
     c.tabIndex = 0;
+    // Ohne Merker landete der Fokus nach jedem Blick in eine Detailseite
+    // wieder am Rasteranfang – bei sieben Kacheln je Reihe jedes Mal neu
+    // hinunterhangeln.
+    if (fkey) c.setAttribute('data-fkey', 'card:' + fkey);
     c.appendChild(posterBox(imageUrl, wide));
     c.appendChild(element('div', 'label', title));
     c.onclick = onSelect;
@@ -464,10 +484,16 @@
     return bar;
   }
 
-  function button(label, onClick, ghost) {
+  function button(label, onClick, ghost, fkey) {
     var b = element('button', 'focusable' + (ghost ? ' ghost' : ''), label);
-    // Beschriftungen sind je Seite eindeutig – als Merker für den Fokus genug.
-    b.setAttribute('data-fkey', 'btn:' + label);
+    /*
+     * Der Merker ist normalerweise die Beschriftung – je Seite eindeutig.
+     * Knoepfe, die beim Klick ihre Beschriftung WECHSELN („☆ Favorit" →
+     * „★ Favorit", „Kategorien wählen" → „Liste zuklappen"), brauchen einen
+     * festen Schluessel: Sonst findet `restoreFocus` sie nicht wieder und der
+     * Fokus springt an den Seitenanfang.
+     */
+    b.setAttribute('data-fkey', 'btn:' + (fkey || label));
     b.onclick = onClick;
     return b;
   }
@@ -487,10 +513,23 @@
   function progressList() {
     var out = [];
     for (var id in state.progress) {
-      if (Object.prototype.hasOwnProperty.call(state.progress, id)) out.push(state.progress[id]);
+      if (!Object.prototype.hasOwnProperty.call(state.progress, id)) continue;
+      var eintrag = state.progress[id];
+      if (!verlaufErlaubt(eintrag)) continue;
+      out.push(eintrag);
     }
     out.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
     return out;
+  }
+
+  /**
+   * Verlaufseintraege, die eine gesperrte oder ausgeblendete Kategorie
+   * betreffen, verschwinden aus Startseite, Empfehlungen und Affinitaet.
+   * Ohne das standen Titel und Poster einer gesperrten Kategorie weiter unter
+   * „Weiterschauen" – die Sperre griff ueberall sonst, nur hier nicht.
+   */
+  function verlaufErlaubt(p) {
+    return !p.group || kategorieErlaubt(p.group);
   }
 
   function resumable() {
@@ -529,6 +568,29 @@
    * gebaut. Das spart bei sechsstelligen Bibliotheken erheblich Speicher und
    * hält die Zugangsdaten aus Kennungen, Favoriten und Verlauf heraus.
    */
+  /**
+   * Abspieladresse allein aus der Kennung bauen.
+   *
+   * Die Kennungen tragen Art und Stream-Nummer bereits in sich
+   * ("xtream|m|123", "xtream|l|123", "xtream|series|5|e|123"). Damit bleiben
+   * Favoriten und „Weiterschauen" bedienbar, auch wenn die zugehoerige
+   * Kategorie gerade nicht geladen ist – vorher meldete die App in genau dem
+   * Fall „Dieser Titel ist in der aktuellen Quelle nicht mehr enthalten",
+   * obwohl er sehr wohl vorhanden war.
+   */
+  function streamUrlAusId(id, ext) {
+    var src = state.source;
+    if (!src || src.kind !== 'xtream' || !id) return '';
+    var teile = String(id).split('|');
+    if (teile.length < 3) return '';
+    var sid = teile[teile.length - 1];
+    var marke = teile[teile.length - 2];
+    if (!/^\d+$/.test(sid)) return '';
+    var art = marke === 'l' ? 'live' : (marke === 'e' ? 'series' : (marke === 'm' ? 'movie' : null));
+    if (!art) return '';
+    return Core.xtreamStreamUrl(art, src.host, src.user, src.pass, sid, ext || null);
+  }
+
   /** Eintrag anhand seiner Kennung in der Bibliothek finden. */
   function findById(id) {
     var lists = [state.library.channels, state.library.movies, state.library.series];
@@ -542,6 +604,17 @@
     for (var l = 0; l < lists.length; l++) {
       for (var i = 0; i < lists[l].length; i++) if (lists[l][i].id === id) return lists[l][i];
     }
+    /*
+     * Folgen stehen in keiner dieser Listen, sondern nur in `serie.episodes` –
+     * „Weiterschauen" fand deshalb NIE eine angefangene Folge wieder.
+     */
+    for (var m = 0; m < lists.length; m++) {
+      for (var j = 0; j < lists[m].length; j++) {
+        var eps = lists[m][j].episodes;
+        if (!eps || !eps.length) continue;
+        for (var e = 0; e < eps.length; e++) if (eps[e].id === id) return eps[e];
+      }
+    }
     return null;
   }
 
@@ -549,6 +622,9 @@
     if (!item) return '';
     if (item.streamURL) return item.streamURL;
     var src = state.source;
+    // Aus dem Merker rekonstruierte Eintraege haben keine Stream-Nummer, wohl
+    // aber eine Kennung, die sie enthaelt.
+    if (item.sid === undefined && item.id) return streamUrlAusId(item.id, item.ext);
     if (!src || src.kind !== 'xtream' || item.sid === undefined) return '';
     return Core.xtreamStreamUrl(item.art || 'movie', src.host, src.user, src.pass, item.sid, item.ext);
   }
@@ -569,18 +645,66 @@
     return out;
   }
 
+  /** Sender tragen „|l|" in der Kennung – siehe Core.parseLiveStreams. */
+  function istSender(id) { return String(id).indexOf('|l|') >= 0; }
+
   function onWatchlist(id) { return !!state.watchlist[id]; }
 
-  function toggleWatchlist(id) {
+  function toggleWatchlist(id, item) {
     if (state.watchlist[id]) delete state.watchlist[id];
-    else state.watchlist[id] = true;
+    else state.watchlist[id] = merkDaten(id, item);
     saveScoped('watchlist', state.watchlist);
   }
 
-  function toggleFavorite(id) {
+  /**
+   * Favorit umschalten. Der Eintrag speichert seine Anzeigedaten mit.
+   *
+   * Vorher stand dort nur `true`, und der Favoriten-Tab loeste die Kennung
+   * ueber die Bibliothek auf. Seit Filme und Serien kategorieweise kommen, ist
+   * die aber leer: Wer einen Film merkte, sah danach „Noch nichts gemerkt".
+   */
+  function toggleFavorite(id, item) {
     if (state.favorites[id]) delete state.favorites[id];
-    else state.favorites[id] = true;
+    else state.favorites[id] = merkDaten(id, item);
     saveScoped('favorites', state.favorites);
+  }
+
+  /** Das Nötigste, um einen gemerkten Eintrag ohne Bibliothek zu zeigen. */
+  function merkDaten(id, item) {
+    if (!item) return { id: id };
+    return {
+      id: id,
+      title: item.title || item.name || '',
+      image: item.posterURL || item.logoURL || null,
+      group: item.group || null,
+      art: item.art || null,
+      ext: item.ext || null,
+      episodes: item.episodes ? 1 : 0   // nur als Merkmal „ist eine Serie"
+    };
+  }
+
+  /**
+   * Gemerkte Eintraege zu anzeigbaren Objekten machen: bevorzugt frisch aus
+   * der Bibliothek (dort sind die Daten aktuell), sonst aus dem Gespeicherten.
+   */
+  function merkListe(map) {
+    var out = [];
+    for (var k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+      var frisch = findById(k);
+      if (frisch) { out.push(frisch); continue; }
+      var d = map[k];
+      // Alte Installationen haben hier noch `true` stehen – ohne Daten laesst
+      // sich nichts anzeigen, der Eintrag bleibt bis zum naechsten Besuch weg.
+      if (!d || d === true || !d.title) continue;
+      if (d.group && !kategorieErlaubt(d.group)) continue;
+      out.push({
+        id: d.id || k, title: d.title, posterURL: d.image || '',
+        group: d.group || '', art: d.art || null, ext: d.ext || null,
+        episodes: d.episodes ? [] : undefined, _ausMerker: true
+      });
+    }
+    return out;
   }
 
 
@@ -639,6 +763,10 @@
     return DESIGNS[0];   // Perl – der iOS-Standard
   }
 
+  function aktuellesDesignIstDunkel() {
+    return !!designById(state.settings.design).dark;
+  }
+
   function accentById(id) {
     for (var i = 0; i < ACCENTS.length; i++) if (ACCENTS[i].id === id) return ACCENTS[i];
     return ACCENTS[0];
@@ -669,6 +797,9 @@
       root.style.setProperty('--text', '#eae7f2');
       root.style.setProperty('--text-dim', '#a9a4bd');
       root.style.setProperty('--on-accent', '#12101f');
+      // Fehlerrot muss auf dunklem Grund aufhellen: Das feste #b3261e lag auf
+      // den dunklen Designs bei 2,3:1 – dunkelrote Schrift auf dunklem Grund.
+      root.style.setProperty('--fehler', '#ff8a80');
     } else {
       // Auf hellem Grund tragen weiße Schleier nicht – es braucht dunkle.
       root.style.setProperty('--surface', 'rgba(0,0,0,0.045)');
@@ -677,6 +808,7 @@
       root.style.setProperty('--text', '#1b1926');
       root.style.setProperty('--text-dim', '#5a5670');
       root.style.setProperty('--on-accent', '#ffffff');
+      root.style.setProperty('--fehler', '#b3261e');
     }
 
     document.getElementById('backdrop').style.background =
@@ -1185,7 +1317,7 @@
         var info = element('div', 'info');
         info.appendChild(element('div', 'name', kat.name));
         var geladen = !!state.katalogCache[katalogSchluessel(art, kat.id)];
-        info.appendChild(element('div', 'sub', geladen ? 'geladen' : 'antippen zum Laden'));
+        info.appendChild(element('div', 'sub', geladen ? 'geladen' : 'noch nicht geladen'));
         row.appendChild(info);
         row.onclick = function () { onWahl(kat); };
         box.appendChild(row);
@@ -1252,7 +1384,10 @@
         b.onclick = function () {
           state.tab = t.id; state.view = null;
           render();
-          setTimeout(focusFirst, 0);
+          // Waehrend der Player offen war, wurde nichts neu aufgebaut – das zuletzt
+    // fokussierte Element existiert noch und wird behalten. `focusFirst` warf
+    // es weg: Nach Sender 300 stand man wieder bei Sender 1.
+    setTimeout(ensureFocus, 0);
         };
         el.tabs.appendChild(b);
       })(TABS[i]);
@@ -1278,8 +1413,11 @@
         var c = card(p.title, p.image, function () {
           // Die Adresse steht bewusst nicht mehr im Verlauf (Zugangsdaten) –
           // hier aus der Bibliothek nachschlagen.
-          var url = p.url || streamUrlOf(findById(p.id));
-          if (!url) return toast('Dieser Titel ist in der aktuellen Quelle nicht mehr enthalten.', 6000);
+          // Reihenfolge: gespeicherte Adresse (M3U), sonst der Eintrag aus der
+          // Bibliothek, sonst aus der Kennung gebaut – Letzteres greift, wenn
+          // die Kategorie des Titels gerade nicht geladen ist.
+          var url = p.url || streamUrlOf(findById(p.id)) || streamUrlAusId(p.id, p.ext);
+          if (!url) return toast('Dieser Titel lässt sich gerade nicht öffnen.', 6000);
           playItem(p.title, url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position, null,
             { image: p.image, group: p.group });
         }, true);
@@ -1309,8 +1447,11 @@
     if (s2) el.content.appendChild(s2);
 
     // Merkliste vor den allgemeinen Regalen – bewusst Gemerktes zuerst.
-    var listItems = pickByIds(lib.movies, state.watchlist)
-      .concat(pickByIds(lib.series, state.watchlist));
+    var listItems = [];
+    var merk = merkListe(state.watchlist);
+    for (var mi = 0; mi < merk.length; mi++) {
+      if (!istSender(merk[mi].id)) listItems.push(merk[mi]);
+    }
     var sList = shelf('Meine Liste', listItems, function (it) {
       return card(it.title, it.posterURL, function () {
         if (it.episodes !== undefined) openSeries(it); else openMovie(it);
@@ -1326,7 +1467,7 @@
 
     var because = becauseYouWatched();
     if (because) {
-      var sBec = shelf('Weil du „' + because.title + '" gesehen hast', because.items, function (m) {
+      var sBec = shelf('Weil du „' + because.title + '“ gesehen hast', because.items, function (m) {
         return card(m.title, m.posterURL, function () { openMovie(m); });
       });
       if (sBec) el.content.appendChild(sBec);
@@ -1409,7 +1550,8 @@
   function renderGridChunk(grid, list, from, count, onSelect) {
     for (var i = from; i < list.length && i < from + count; i++) {
       (function (item) {
-        grid.appendChild(card(item.title, item.posterURL, function () { onSelect(item); }));
+        grid.appendChild(card(item.title, item.posterURL,
+          function () { onSelect(item); }, false, item.id));
       })(list[i]);
     }
     if (from + count < list.length) {
@@ -1534,13 +1676,13 @@
     }
     row.appendChild(info);
 
-    if (isFavorite(ch.id)) row.appendChild(element('span', 'badge-live', '★'));
+    if (isFavorite(ch.id)) row.appendChild(element('span', 'badge-fav', '★'));
     if (now) row.appendChild(element('span', 'badge-live', 'LIVE'));
 
     row.onclick = function () { playChannel(ch); };
     // Lange OK-Taste ist auf der Fernbedienung unzuverlässig – Favorit über
     // die blaue Farbtaste (403) im Tastatur-Handler.
-    row._favTarget = ch.id;
+    row._favTarget = ch.id; row._favItem = ch;
     return row;
   }
 
@@ -1605,7 +1747,7 @@
     var wahl = art === 'm' ? state.katWahl.movies : state.katWahl.series;
 
     if (state.katalogLaedt) {
-      return renderEmpty('„' + state.katalogLaedt + '" wird geladen …',
+      return renderEmpty('„' + state.katalogLaedt + '“ wird geladen …',
         'Einen Moment – die Kategorie kommt direkt vom Panel.');
     }
 
@@ -1627,8 +1769,18 @@
       });
     }
 
-    var items = katalogAusCache(art, wahl.id) || [];
+    var items = katalogAusCache(art, wahl.id);
+    if (!items) {
+      // Der Zwischenspeicher haelt nur drei Kategorien. Wurde diese verdraengt,
+      // wird sie nachgeholt statt als „leer" gemeldet.
+      katalogLaden(art, wahl.id, wahl.name, function () { render(); });
+      return renderEmpty('„' + wahl.name + '“ wird geladen …',
+        'Einen Moment – die Kategorie kommt direkt vom Panel.');
+    }
     var zurueck = button('◀ Alle Kategorien', function () {
+      // Fokus auf die Kategorie vorbelegen, aus der wir kommen – bei 299
+      // Eintraegen ist das der Unterschied zwischen Stoebern und Aufgeben.
+      focusWuenschen('kat:' + art + ':' + wahl.id);
       if (art === 'm') state.katWahl.movies = null; else state.katWahl.series = null;
       render();
     });
@@ -1695,16 +1847,29 @@
     // Aus den gemerkten IDs heraus arbeiten: Fünf Voll-Scans über die
     // Bibliothek für ein paar Dutzend Treffer waren pro Aufbau spürbar.
     var favChannels = pickByIds(lib.channels, state.favorites);
-    var favMovies = pickByIds(lib.movies, state.favorites);
-    var favSeries = pickByIds(lib.series, state.favorites);
+    /*
+     * Filme und Serien kommen aus den gemerkten Daten selbst, nicht aus der
+     * Bibliothek: Bei kategorieweisem Laden ist die leer, und der Tab meldete
+     * „Noch nichts gemerkt", obwohl alles gespeichert war.
+     */
+    var favAlle = merkListe(state.favorites);
+    var favMovies = [], favSeries = [];
+    for (var f = 0; f < favAlle.length; f++) {
+      if (istSender(favAlle[f].id)) continue;   // Sender stehen in der Zeilenliste
+      (favAlle[f].episodes !== undefined ? favSeries : favMovies).push(favAlle[f]);
+    }
 
-    var listMoviesFav = pickByIds(lib.movies, state.watchlist);
-    var listSeriesFav = pickByIds(lib.series, state.watchlist);
+    var listAlle = merkListe(state.watchlist);
+    var listMoviesFav = [], listSeriesFav = [];
+    for (var g = 0; g < listAlle.length; g++) {
+      if (istSender(listAlle[g].id)) continue;
+      (listAlle[g].episodes !== undefined ? listSeriesFav : listMoviesFav).push(listAlle[g]);
+    }
     var anyList = listMoviesFav.length > 0 || listSeriesFav.length > 0;
     if (!favChannels.length && !favMovies.length && !favSeries.length && !anyList) {
       return renderEmpty('Noch nichts gemerkt',
         'Markiere Sender mit der blauen Taste oder setze Titel auf der Detailseite ' +
-        'auf „Meine Liste".');
+        'auf „Meine Liste“.');
     }
     if (favChannels.length) {
       el.content.appendChild(element('div', 'section-title', 'Sender'));
@@ -1733,7 +1898,7 @@
   // ---- Detailseiten ----
 
   function backButton() {
-    return button('‹ Zurück', function () { state.view = null; render(); }, true);
+    return button('‹ Zurück', function () { ansichtZurueck(); }, true);
   }
 
   function detailHeader(title, backdrop, metaText) {
@@ -1758,8 +1923,28 @@
     return head;
   }
 
+  /**
+   * Ansicht wechseln und die vorherige merken. Ohne das verwarf ein Zurueck
+   * aus einem Suchtreffer die ganze Suche – auf einer Bildschirmtastatur ist
+   * eine Eingabe teuer, und man musste sie nach jedem angesehenen Treffer neu
+   * tippen.
+   */
+  function vorherigeAnsicht() {
+    var v = state.view;
+    if (!v) return null;
+    if (v.type === 'search') return { type: 'search', query: v.query };
+    if (v.type === 'guide') return { type: 'guide' };
+    return v.zurueck || null;   // aus einer Detailseite die Ebene darunter erben
+  }
+
+  function ansichtZurueck() {
+    var ziel = state.view && state.view.zurueck;
+    state.view = ziel || null;
+    render();
+  }
+
   function openMovie(movie) {
-    state.view = { type: 'movie', item: movie };
+    state.view = { type: 'movie', item: movie, zurueck: vorherigeAnsicht() };
     render();
     // Xtream liefert Beschreibung/Backdrop erst auf Nachfrage.
     if (state.source.kind === 'xtream' && movie.xtreamStreamID && !movie._detailsTried) {
@@ -1797,27 +1982,33 @@
     var actions = element('div', 'detail-actions');
     var canResume = resume && resume.duration > 0 && resume.position > 30 &&
       (resume.position / resume.duration) < 0.95;
+    // Der Abspiel-Knopf ist das Erstziel: Wer eine Detailseite oeffnet, will in
+    // aller Regel genau das – und soll nur noch OK druecken muessen.
     if (canResume) {
-      actions.appendChild(button('▶ Weiter ab ' + durationText(resume.position), function () {
+      var weiter = button('▶ Weiter ab ' + durationText(resume.position), function () {
         playItem(m.title, streamUrlOf(m), m.group, 'movie', m.id, resume.position, null,
           { image: m.posterURL, group: m.group });
-      }));
+      });
+      weiter.setAttribute('data-erstziel', '1');
+      actions.appendChild(weiter);
       actions.appendChild(button('Von vorn', function () {
         playItem(m.title, streamUrlOf(m), m.group, 'movie', m.id, 0, null,
           { image: m.posterURL, group: m.group });
       }, true));
     } else {
-      actions.appendChild(button('▶ Abspielen', function () {
+      var ab = button('▶ Abspielen', function () {
         playItem(m.title, streamUrlOf(m), m.group, 'movie', m.id, 0, null,
           { image: m.posterURL, group: m.group });
-      }));
+      });
+      ab.setAttribute('data-erstziel', '1');
+      actions.appendChild(ab);
     }
     actions.appendChild(button(isFavorite(m.id) ? '★ Favorit' : '☆ Favorit', function () {
-      toggleFavorite(m.id); render();
-    }, true));
+      toggleFavorite(m.id, m); render();
+    }, true, 'fav'));
     actions.appendChild(button(onWatchlist(m.id) ? '✓ Auf meiner Liste' : '+ Meine Liste', function () {
-      toggleWatchlist(m.id); render();
-    }, true));
+      toggleWatchlist(m.id, m); render();
+    }, true, 'merk'));
     el.content.appendChild(actions);
 
     if (m.plot) el.content.appendChild(element('div', 'detail-plot', m.plot));
@@ -1840,11 +2031,14 @@
   }
 
   function openSeries(series) {
-    state.view = { type: 'series', item: series, season: null };
+    state.view = { type: 'series', item: series, season: null, zurueck: vorherigeAnsicht() };
     if (series.episodes && series.episodes.length) { render(); return; }
     if (state.source.kind !== 'xtream' || !series.xtreamSeriesID) { render(); return; }
 
-    state.loading = true; render();
+    state.loading = true;
+    // Sonst stand hier „Bibliothek wird geladen …“ – der Nutzer hat aber
+    // eine Serie angetippt, nicht die Bibliothek neu geladen.
+    state.loadingStep = 'Folgen werden geladen …'; render();
     var url = Core.xtreamApi(state.source.host, state.source.user, state.source.pass,
       'get_series_info', { series_id: series.xtreamSeriesID });
     httpGetJson(url, function (err, json) {
@@ -1872,11 +2066,11 @@
 
     var actions = element('div', 'detail-actions');
     actions.appendChild(button(isFavorite(s.id) ? '★ Favorit' : '☆ Favorit', function () {
-      toggleFavorite(s.id); render();
-    }, true));
+      toggleFavorite(s.id, s); render();
+    }, true, 'fav'));
     actions.appendChild(button(onWatchlist(s.id) ? '✓ Auf meiner Liste' : '+ Meine Liste', function () {
-      toggleWatchlist(s.id); render();
-    }, true));
+      toggleWatchlist(s.id, s); render();
+    }, true, 'merk'));
     el.content.appendChild(actions);
 
     if (s.plot) el.content.appendChild(element('div', 'detail-plot', s.plot));
@@ -1951,7 +2145,17 @@
     panel.appendChild(element('h2', null, 'Suche'));
     var input = element('input', 'focusable');
     input.type = 'text';
+    input.placeholder = 'Film, Serie oder Sender …';
     input.value = state.view.query || '';
+    // Hier ist das Feld der Zweck der Seite – anders als bei der
+    // Kategorienliste soll die Bildschirmtastatur also aufgehen.
+    input.setAttribute('data-erstziel', '1');
+    input.setAttribute('data-fkey', 'suchfeld');
+    // Mitschreiben, ohne neu zu zeichnen: Wird waehrend des Tippens neu
+    // aufgebaut (z. B. weil das Titelverzeichnis fertig wird), war das
+    // Getippte sonst weg und die Bildschirmtastatur klappte zu.
+    input.oninput = function () { state.view.query = input.value; };
+    input.onkeyup = input.oninput;   // manche TV-Tastaturen liefern kein input
     panel.appendChild(input);
     var go = button('Suchen', function () {
       state.view.query = input.value;
@@ -1960,7 +2164,9 @@
     panel.appendChild(go);
     el.content.appendChild(panel);
 
-    var q = (state.view.query || '').toLowerCase();
+    // Trimmen: Die webOS-Tastatur haengt bei Wortvorschlaegen ein Leerzeichen
+    // an, und „film " fand dann nichts.
+    var q = (state.view.query || '').replace(/^\s+|\s+$/g, '').toLowerCase();
     if (q.length < 2) {
       // Der Knopf fuer das Titelverzeichnis gehoert hierher, nicht erst hinter
       // eine magere Trefferliste – so laesst er sich vor der Suche vorbereiten.
@@ -1996,7 +2202,7 @@
     if (!ch.length && !mv.length && !sr.length) {
       el.content.appendChild(element('div', 'section-title', 'Keine Treffer'));
       el.content.appendChild(element('div', 'detail-meta',
-        'Für „' + state.view.query + '" wurde nichts gefunden.'));
+        'Für „' + state.view.query + '“ wurde nichts gefunden.'));
       return;
     }
     if (ch.length) {
@@ -2021,16 +2227,20 @@
    * der geöffneten Kategorien.
    */
   function indexHinweis() {
-    var box = element('div', 'panel');
+    /*
+     * Sobald das Verzeichnis steht, ist das eine reine Statusmeldung – die
+     * bekommt eine schmale Zeile statt eines Panels. Als Panel schob sie die
+     * Trefferliste unter den sichtbaren Bereich, und man sah nach dem Suchen
+     * zuerst Weissraum.
+     */
     if (state.indexLaedt) {
-      box.appendChild(element('div', 'detail-meta', 'Titelverzeichnis wird aufgebaut …'));
-      return box;
+      return element('div', 'such-status', 'Titelverzeichnis wird aufgebaut …');
     }
     if (state.filmIndex) {
-      box.appendChild(element('div', 'detail-meta',
-        'Titelverzeichnis aktiv: ' + state.filmIndex.length + ' Filme durchsuchbar.'));
-      return box;
+      return element('div', 'such-status',
+        'Alle ' + state.filmIndex.length + ' Filme durchsuchbar.');
     }
+    var box = element('div', 'panel');
     box.appendChild(element('div', 'detail-meta',
       'Gesucht wird gerade nur in den geöffneten Kategorien. Das Titelverzeichnis ' +
       'macht alle Filme durchsuchbar; es kostet einmalig etwa 15 Sekunden und ' +
@@ -2050,6 +2260,13 @@
   function filmIndexAufbauen() {
     var src = state.source;
     if (!src || src.kind !== 'xtream' || state.indexLaedt) return;
+    // Ohne Kategorienliste liesse sich nicht entscheiden, was gesperrt ist –
+    // dann lieber kein Verzeichnis als eines, das die Sperren umgeht.
+    if (!state.vodKategorien.length) {
+      toast('Ohne Kategorienliste lässt sich kein Titelverzeichnis aufbauen. ' +
+        'In den Einstellungen „Neu laden“ versuchen.', 8000);
+      return;
+    }
     state.indexLaedt = true;
     render();
 
@@ -2080,6 +2297,9 @@
       render();
     };
     xhr.ontimeout = xhr.onerror;
+    // Ohne onabort bliebe `indexLaedt` haengen, wenn die Plattform die Anfrage
+    // abbricht (App in den Hintergrund, Netzwechsel) – der Knopf kaeme nie wieder.
+    xhr.onabort = xhr.onerror;
     xhr.send();
   }
 
@@ -2096,8 +2316,15 @@
     for (var i = 0; i < idx.length && out.length < limit; i++) {
       var e = idx[i];
       if (e.t.toLowerCase().indexOf(q) < 0) continue;
-      var gruppe = katName[e.c] || 'Allgemein';
-      if (!kategorieErlaubt(gruppe)) continue;
+      /*
+       * Eine Kategorie, die die Kategorienliste nicht kennt, gilt als GESPERRT.
+       * Vorher fiel sie auf „Allgemein" – ein Name, der nie in den Sperrlisten
+       * steht. Panels, die ihre 18+-Rubrik aus `get_vod_categories` heraushalten
+       * (aber in `get_vod_streams` mitliefern), und ein fehlgeschlagener Abruf
+       * der Kategorienliste hebelten damit die Kindersicherung aus.
+       */
+      var gruppe = katName[e.c];
+      if (!gruppe || !kategorieErlaubt(gruppe)) continue;
       if (state.settings.languages.length) {
         var probe = { title: e.t, group: gruppe, name: e.t };
         var durch = Core.filterByLanguage({ channels: [], movies: [probe], series: [] },
@@ -2111,7 +2338,10 @@
         group: gruppe,
         sid: e.s,
         art: 'movie',
-        ext: e.e || 'mp4'
+        ext: e.e || 'mp4',
+        // Ohne dieses Feld holt `openMovie` keine Details – Suchtreffer haetten
+        // dauerhaft keine Beschreibung, kein Backdrop und keine Besetzung.
+        xtreamStreamID: e.s
       });
     }
     return out;
@@ -2159,7 +2389,7 @@
         }
         row.appendChild(info);
         row.onclick = function () { playChannel(ch); };
-        row._favTarget = ch.id;
+        row._favTarget = ch.id; row._favItem = ch; row._favItem = ch;
         box.appendChild(row);
       })(withEpg[i]);
     }
@@ -2241,7 +2471,7 @@
       }
       if (!treffer) {
         hinweis.textContent = q
-          ? 'Keine Kategorie enthält „' + feld.value + '".'
+          ? 'Keine Kategorie enthält „' + feld.value + '“.'
           : 'Keine Kategorien geladen.';
       } else if (treffer > gezeigt) {
         hinweis.textContent = gezeigt + ' von ' + treffer +
@@ -2378,7 +2608,7 @@
         var id = addProfile(v);
         state.view.addProfile = false;
         switchProfile(id);
-        toast('Profil „' + v + '" angelegt.');
+        toast('Profil „' + v + '“ angelegt.');
         render();
       }));
       newPanel.appendChild(newActions);
@@ -2409,7 +2639,10 @@
         var c = element('span', 'chip focusable' + (state.settings.accent === a.id ? ' active' : ''), a.name);
         c.tabIndex = 0;
         c.setAttribute('data-fkey', 'accent:' + a.id);
-        c.style.borderColor = a.color;
+        // Dieselbe Dimmung wie in applyTheme: Die Rohfarbe ist auf hellem
+        // Grund nicht zu sehen – ausgerechnet beim Rahmen, an dem man die
+        // Farbe erkennen soll.
+        c.style.borderColor = aktuellesDesignIstDunkel() ? a.color : darken(a.color, 0.55);
         c.onclick = function () {
           state.settings.accent = a.id; save('settings', state.settings);
           applyTheme(); render();
@@ -2601,9 +2834,20 @@
     var panel = element('div', 'panel');
     panel.appendChild(element('h2', null, 'Quelle einrichten'));
     if (state.authFehler) {
-      panel.appendChild(element('p', 'fehler',
-        'Anmeldung fehlgeschlagen: ' + state.authFehler + '. Bitte Zugangsdaten ' +
-        'pruefen – bei abgelaufenem Zugang nennt der Anbieter neue.'));
+      panel.appendChild(element('p', 'fehler', state.authIstNetz
+        ? state.authFehler + '. Prüfe die Internetverbindung des Fernsehers.'
+        : 'Anmeldung fehlgeschlagen: ' + state.authFehler + '. Bitte Zugangsdaten ' +
+          'prüfen – bei abgelaufenem Zugang nennt der Anbieter neue.'));
+      // Bei einem Netzaussetzer stimmen die gespeicherten Daten ja – dann soll
+      // ein Knopf genuegen statt alles neu einzutippen.
+      if (state.authIstNetz && saved) {
+        var erneut = button('Erneut versuchen', function () {
+          state.authFehler = null; state.authIstNetz = false;
+          reloadSource();
+        });
+        erneut.setAttribute('data-erstziel', '1');
+        panel.appendChild(erneut);
+      }
     }
     panel.appendChild(element('p', null,
       'GlassTV spielt deine eigene Playlist ab – Xtream Codes oder M3U. ' +
@@ -2756,6 +3000,11 @@
       state.epg = {};
       // Eine M3U-Datei enthält alles auf einmal – kein Nachladen nötig.
       state.lazyKatalog = false;
+      state.filmIndex = null;
+      state.indexLaedt = false;
+      state.katalogCache = {};
+      state.katalogReihe = [];
+      state.katWahl = { movies: null, series: null };
       // Ohne den Fang bliebe bei einem Parser-Fehler der Spinner für immer
       // stehen – und die Oberfläche hätte kein bedienbares Element mehr.
       try {
@@ -2770,6 +3019,7 @@
 
   function loadXtreamSource(host, user, pass) {
     state.authFehler = null;
+    state.authIstNetz = false;
     state.loading = true;
     state.loadingStep = 'Anmeldung wird geprüft …';
     render();
@@ -2779,6 +3029,7 @@
     var vodKategorien = [], serienKategorien = [];
     var problems = [];
     var authError = null;
+    var netzFehler = null;
 
     /** Rohantwort der Kategorien in eine schlanke Liste bringen. */
     function kategorienListe(roh) {
@@ -2805,9 +3056,12 @@
         // Dauerhaft merken: Ein Hinweis verschwindet nach acht Sekunden und
         // laesst den Nutzer vor „nichts geladen" sitzen – etwa wenn das Abo
         // abgelaufen ist oder das Panel das Passwort geaendert hat.
-        state.authFehler = authError.message;
+        state.authFehler = netzFehler
+          ? 'Der Server war nicht erreichbar (' + netzFehler.message + ')'
+          : authError.message;
+        state.authIstNetz = !!netzFehler;
         render();
-        return toast('Anmeldung fehlgeschlagen: ' + authError.message, 8000);
+        return toast(state.authFehler, 8000);
       }
       state.authFehler = null;
       state.source = { kind: 'xtream', host: host, user: user, pass: pass };
@@ -2817,6 +3071,11 @@
       state.serienKategorien = serienKategorien;
       state.katalogCache = {};
       state.katalogReihe = [];
+      // Das Titelverzeichnis gehoert zur alten Quelle: Seine Stream-Nummern
+      // mit den neuen Zugangsdaten ergaeben fremde oder tote Adressen, und
+      // seine Kategorie-Kennungen zeigten auf die falschen Namen.
+      state.filmIndex = null;
+      state.indexLaedt = false;
       try {
         afterLoad(lib);
       } catch (parseError) {
@@ -2825,7 +3084,7 @@
       }
       if (problems.length) {
         toast('Teilweise geladen – nicht abrufbar: ' + problems.join(', ') +
-          '. In den Einstellungen „Neu laden" versuchen.', 9000);
+          '. In den Einstellungen „Neu laden“ versuchen.', 9000);
       }
       loadEpg();
     }
@@ -2834,7 +3093,12 @@
     // parallel teilen sich die Bandbreite und laufen eher ins Zeitlimit.
     function step1auth() {
       httpGetJson(Core.xtreamApi(host, user, pass, null), function (err, json) {
-        if (err) authError = err;
+        /*
+         * Netzfehler und abgelehnte Anmeldung sind zweierlei: Ein WLAN-Aussetzer
+         * warf den Nutzer bisher mit „Anmeldung fehlgeschlagen" zurueck ins
+         * Formular, obwohl die Zugangsdaten stimmten.
+         */
+        if (err) { netzFehler = err; authError = err; }
         else if (json && json.user_info && Number(json.user_info.auth) === 0) {
           authError = new Error('Benutzer oder Passwort falsch');
         }
@@ -2956,6 +3220,16 @@
     el.player.className = 'open';
     el.scrubFill.style.width = '0%';
     el.times.textContent = kind === 'live' ? 'Live' : '';
+    /*
+     * Der Hinweis muss zum Inhalt passen: Bei Live wechseln die Pfeiltasten den
+     * Sender, gespult wird nicht. Der feste Text versprach beides gleichzeitig.
+     */
+    var hint = document.getElementById('player-hint');
+    if (hint) {
+      hint.textContent = kind === 'live'
+        ? 'OK = Pause · ◀ ▶ = Sender wechseln · Zurück = schließen'
+        : 'OK = Pause · ◀ ▶ = 10 s spulen · Zurück = schließen';
+    }
 
     el.video.src = url;
     el.video.load();
@@ -3037,6 +3311,9 @@
       // „Weiterschauen" kein Bild und die Empfehlungen keine Grundlage.
       image: (player.meta && player.meta.image) || prev.image || null,
       group: (player.meta && player.meta.group) || prev.group || null,
+      // Die Dateiendung gehoert dazu: Ohne sie muesste ein rekonstruierter
+      // Link „mp4" raten, und MKV-Titel liefen nicht wieder an.
+      ext: (player.meta && player.meta.ext) || prev.ext || null,
       position: position, duration: duration, updatedAt: Date.now(),
     };
     trimProgress();
@@ -3163,8 +3440,14 @@
     }
 
     if (code === 461 || code === 8) {
-      if (state.view) { state.view = null; render(); e.preventDefault(); return; }
-      if (state.gate) return;              // Profilwahl ist die oberste Ebene
+      if (state.view) { ansichtZurueck(); e.preventDefault(); return; }
+      /*
+       * „Wer schaut?" ist bei mehreren Profilen der ERSTE Bildschirm. Vorher
+       * verschluckte die Zurueck-Taste hier alles, und weil `appinfo.json`
+       * `disableBackHistoryAPI` setzt, beendet auch die Plattform nicht: Man
+       * kam nur noch ueber die Home-Taste heraus. Genau das prueft LG.
+       */
+      if (state.gate) { exitApp(); e.preventDefault(); return; }
       // Eine geöffnete Kategorie ist eine eigene Ebene – erst zurück zur
       // Kategorienliste, dann erst zur Startseite.
       if (state.lazyKatalog && state.tab === 'movies' && state.katWahl.movies) {
@@ -3182,7 +3465,7 @@
     if (code === 406) {
       var a = document.activeElement;
       if (a && a._favTarget) {
-        toggleFavorite(a._favTarget);
+        toggleFavorite(a._favTarget, a._favItem);
         toast(isFavorite(a._favTarget) ? 'Zu Favoriten hinzugefügt' : 'Aus Favoriten entfernt', 2000);
         render();
       }
@@ -3198,7 +3481,19 @@
     else if (code === 40) { moveFocus(0, 1); e.preventDefault(); }
     else if (code === 13) {
       var el2 = document.activeElement;
-      if (el2 && el2.tagName !== 'INPUT' && el2.click) el2.click();
+      if (el2 && el2.tagName === 'INPUT') {
+        /*
+         * Auf der Bildschirmtastatur ist OK die Abschlussgeste. Vorher passierte
+         * nichts, und man musste blind nach unten zum Knopf navigieren.
+         */
+        if (state.view && state.view.type === 'search') {
+          state.view.query = el2.value;
+          render();
+          e.preventDefault();
+        }
+        return;
+      }
+      if (el2 && el2.click) el2.click();
     }
   }
 

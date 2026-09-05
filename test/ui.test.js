@@ -120,6 +120,52 @@ test('Erstfokus meidet Textfelder (Bildschirmtastatur)', function () {
   assert.notStrictEqual(aktiv.tagName, 'TEXTAREA');
 });
 
+
+test('OK im Suchfeld loest die Suche aus', function () {
+  /*
+   * Auf der Bildschirmtastatur ist OK die Abschlussgeste. Vorher fiel sie
+   * durch: Der Handler sprang bei INPUT heraus, ohne etwas zu tun, und man
+   * musste blind nach unten zum Knopf navigieren.
+   *
+   * Geprueft wird am Quelltext, weil der Suchbildschirm ohne eingerichtete
+   * Quelle gar nicht erreichbar ist (dann rendert die App das Formular).
+   */
+  var quelle = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+  var stelle = quelle.indexOf('else if (code === 13)');
+  assert.ok(stelle > 0, 'kein Handler fuer OK');
+  var block = quelle.slice(stelle, stelle + 700);
+  assert.ok(block.indexOf("tagName === 'INPUT'") > 0, 'OK behandelt Eingabefelder nicht');
+  assert.ok(block.indexOf("state.view.query = el2.value") > 0,
+    'OK uebernimmt den Suchbegriff nicht');
+
+  // Und das Suchfeld muss Erstziel sein sowie einen Platzhalter tragen.
+  var such = quelle.indexOf('function renderSearch');
+  var sblock = quelle.slice(such, such + 1400);
+  assert.ok(sblock.indexOf("data-erstziel") > 0, 'Suchfeld ist nicht das Erstziel');
+  assert.ok(sblock.indexOf('input.placeholder') > 0, 'Suchfeld ohne Platzhalter');
+  assert.ok(sblock.indexOf('input.oninput') > 0, 'Suchbegriff wird beim Tippen nicht gemerkt');
+});
+
+test('Umschaltknoepfe behalten ihren Fokusmerker', function () {
+  // "☆ Favorit" wird zu "★ Favorit" – ohne festen Schluessel findet
+  // restoreFocus den Knopf nicht wieder und der Fokus springt weg.
+  var quelle = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+  assert.ok(quelle.indexOf("'btn:' + (fkey || label)") > 0,
+    'button() nimmt keinen festen Fokusschluessel entgegen');
+  var favs = quelle.split("toggleFavorite(").length - 1;
+  assert.ok(favs >= 2, 'Favoriten-Umschalter nicht gefunden');
+  assert.ok(quelle.indexOf("}, true, 'fav'));") > 0, 'Favorit-Knopf ohne festen Schluessel');
+  assert.ok(quelle.indexOf("}, true, 'merk'));") > 0, 'Merkliste-Knopf ohne festen Schluessel');
+});
+
+test('Formularelemente erben die Schriftart', function () {
+  // Ohne diese Regel rendern alle Tabs und Knoepfe in der Systemschrift
+  // (auf dem Geraet gemessen: Arial), die Chips daneben in LG Smart UI.
+  var css = fs.readFileSync(path.join(SRC, 'style.css'), 'utf8');
+  assert.ok(/button[^{]*,[^{]*input[^{]*\{[^}]*font-family:\s*inherit/.test(css),
+    'button/input erben font-family nicht');
+});
+
 test('appinfo.json ist gültig und vollständig', function () {
   var info = JSON.parse(fs.readFileSync(path.join(SRC, 'appinfo.json'), 'utf8'));
   assert.strictEqual(info.id, 'de.app.glasstv');

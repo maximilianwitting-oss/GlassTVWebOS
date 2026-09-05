@@ -103,14 +103,19 @@ technisch nicht möglich (siehe unten).
 - **Suche über alle Filme ist zuschaltbar.** Ohne die Filme im Speicher sucht die
   App zunächst in den geöffneten Kategorien. Ein Knopf im Suchbildschirm baut
   ein Titelverzeichnis über den ganzen Katalog auf: 142.246 Titel für rund
-  15 MB. Es entsteht **ohne `JSON.parse`** – der volle Objektgraph war der
-  eigentliche Kostentreiber. Stattdessen liest ein Scanner Name, Stream-Nummer,
-  Kategorie und Dateiendung direkt aus dem Antworttext. Gegen `JSON.parse`
-  geprüft: **0 Abweichungen über alle 142.246 Einträge**. Datensatzgrenzen
-  laufen über die echten Objektklammern und nicht über ein Feld – der Name
-  steht vor `stream_id`, Kategorie und Endung dahinter, sodass ein Schnitt am
-  Feld jeden Eintrag Werte seines Nachbarn erben ließe. Strings werden dabei
-  übersprungen, damit eine Klammer im Filmtitel keine Grenze vortäuscht.
+  45 MB, gegenüber etwa 150 MB für den vollen Objektgraphen. Es entsteht
+  **ohne `JSON.parse`** – ein Scanner liest Name, Stream-Nummer, Kategorie und
+  Dateiendung direkt aus dem Antworttext. Gegen `JSON.parse` geprüft:
+  **0 Abweichungen über alle 142.246 Einträge**. Zwei Fallen stecken darin:
+  Datensatzgrenzen laufen über die echten Objektklammern und nicht über ein
+  Feld – der Name steht vor `stream_id`, Kategorie und Endung dahinter, sodass
+  ein Schnitt am Feld jeden Eintrag Werte seines Nachbarn erben ließe (Strings
+  werden übersprungen, damit eine Klammer im Filmtitel keine Grenze
+  vortäuscht). Und jedes gelesene Feld wird **kopiert**: V8 legt für
+  Teilzeichenketten ab 13 Zeichen keine Kopie an, sondern einen Zeiger auf den
+  Elternstring – ein einziger behaltener Filmtitel hielt damit die ganze
+  58-MB-Antwort fest, also genau den Posten, den das Verzeichnis vermeiden
+  soll.
 - **Kein Mini-Player.** Das Video liegt auf einer Hardware-Ebene, die sich
   nicht verkleinern lässt: Schrumpft man das `<video>` per CSS, läuft der Ton
   weiter und das Bild bleibt schwarz. Die naheliegende Abhilfe – die Videoebene
@@ -135,7 +140,7 @@ statt `fetch`. Der Code läuft ohne Build-Schritt direkt so, wie er hier steht.
 ```sh
 export PATH="$HOME/.local/webos-toolchain/node/bin:$PATH"
 node test/core.test.js    # 36 Prüfungen: M3U, Xtream, Sprache, EPG, Titelindex
-node test/ui.test.js      # 7 Prüfungen: rendert, Tabs, Fokus, appinfo (jsdom)
+node test/ui.test.js      # 10 Prüfungen: rendert, Tabs, Fokus, Suche, appinfo (jsdom)
 ```
 
 ## Auf dem Fernseher prüfen
