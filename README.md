@@ -165,6 +165,12 @@ ares-package src -o .        # erzeugt de.app.glasstv_<version>_all.ipk
 Die Toolchain (Node + `@webos-tools/cli`) liegt unter
 `~/.local/webos-toolchain/`.
 
+## Veröffentlichung
+
+Der Stand der Release-Vorbereitung, die Pflichtdokumente für LGs Prüfung und
+die realistische Einschätzung stehen in [RELEASE.md](RELEASE.md). Die Unterlagen
+für die Einreichung liegen in `docs/` (UX-Szenario für die Prüfer, Store-Texte).
+
 ## Auf den Fernseher bringen
 
 LG lässt selbstgebaute Apps **nur im Developer Mode** zu. Einmalige Einrichtung:
