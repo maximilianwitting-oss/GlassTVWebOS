@@ -14,6 +14,8 @@
       <h1>GlassTV</h1>
       <nav id="tabs"></nav>
       <span class="spacer"></span>
+      <button id="btn-search" class="tab focusable">Suche</button>
+      <button id="btn-guide" class="tab focusable">Guide</button>
       <button id="btn-settings" class="tab focusable">Einstellungen</button>
     </header>
     <main id="content"></main>
@@ -26,8 +28,10 @@
         <div id="player-title"></div>
         <div id="player-sub"></div>
       </div>
-      <div id="player-bar">
-        <span id="player-hint">OK = Pause · ◀ ▶ = 10 s · Zurück = schließen</span>
+      <div>
+        <div id="player-scrub"><div id="player-scrub-fill"></div></div>
+        <div id="player-times"></div>
+        <div id="player-hint">OK = Pause · ◀ ▶ = 10 s spulen bzw. Sender wechseln · Zurück = schließen</div>
       </div>
     </div>
   </div>

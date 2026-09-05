@@ -46,6 +46,12 @@ function boot(localStorageSeed) {
 
   win.eval(fs.readFileSync(path.join(SRC, 'core.js'), 'utf8'));
   win.eval(fs.readFileSync(path.join(SRC, 'app.js'), 'utf8'));
+  // Im Browser laufen die Skripte am Ende des <body>, danach feuert
+  // DOMContentLoaded und die App startet. jsdom lässt das Dokument hier im
+  // Zustand "loading" stehen, deshalb das Ereignis von Hand auslösen.
+  if (win.document.readyState === 'loading') {
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded', { bubbles: true }));
+  }
   return win;
 }
 
@@ -63,7 +69,7 @@ test('startet ohne Quelle mit dem Einrichtungs-Formular', function () {
 test('Tabs werden gerendert und sind fokussierbar', function () {
   var win = boot(null);
   var tabs = win.document.querySelectorAll('#tabs .tab');
-  assert.strictEqual(tabs.length, 3);
+  assert.strictEqual(tabs.length, 5);
   assert.ok(tabs[0].className.indexOf('focusable') >= 0);
 });
 

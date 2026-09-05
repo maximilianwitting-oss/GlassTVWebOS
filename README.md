@@ -7,21 +7,49 @@ JavaScript portiert — mit denselben Testfällen.
 
 ## Status
 
-Lauffähige erste Version (Machbarkeitsstufe):
+Auf einem LG C9 (webOS 4.10) installiert und im Betrieb geprüft – mit einer
+Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
 
-- **Quellen**: Xtream Codes (Sender, Filme, Serien, Folgen auf Nachfrage) und
-  M3U/M3U8. Zugangsdaten liegen nur im `localStorage` des Fernsehers.
-- **EPG**: XMLTV vom Xtream-Panel; laufende Sendung mit Fortschrittsbalken und
-  „danach …" in der Senderliste.
-- **Player**: HTML5-`<video>`. OK pausiert, ◀ ▶ spulen 10 s, Zurück schließt.
+- **Tabs**: Start · Live TV · Filme · Serien · Favoriten; Suche, Guide und
+  Einstellungen als Schaltflächen rechts oben.
+- **Start**: Regale für Weiterschauen (mit Restzeit), Jetzt im TV, Filme, Serien.
+- **Quellen**: Xtream Codes (Sender, Filme, Serien, Folgen und Filmdetails auf
+  Nachfrage) und M3U/M3U8. Zugangsdaten liegen nur im `localStorage` des Geräts.
+- **Kategorien**: Chips in Live TV, Filmen und Serien; Sortierung nach Name,
+  Jahr oder Bewertung.
+- **Detailseiten**: Backdrop, Beschreibung, Regie/Besetzung, Favorit,
+  „Weiter ab …" und ähnliche Titel. Serien mit Staffel-Chips und Folgenliste.
+- **EPG**: XMLTV vom Panel; laufende Sendung mit Fortschrittsbalken, „danach …"
+  und ein Programmführer (grüne Taste).
+- **Player**: HTML5-`<video>` – Fortschrittsanzeige, Weiterschauen-Position,
+  automatische nächste Folge, Zapping mit ◀ ▶ bei Live.
+- **Designs**: 12 dunkle Designs und 15 Akzentfarben aus der iOS-App, plus
+  „Überrasch mich". Helle Designs bewusst weggelassen: Sie blenden im
+  abgedunkelten Wohnzimmer.
+- **Sprachfilter** mit demselben Sicherheitsnetz wie iOS, **Kategorien
+  ausblenden** und **Kindersicherung** (PIN sperrt Kategorien app-weit).
 - **Bedienung**: vollständig mit der Fernbedienung. Der Fokus wandert
   *geometrisch* (nicht in DOM-Reihenfolge), damit Raster und Reihen sich
-  räumlich anfühlen.
-- **Optik**: Grundfarbe und Akzent der iOS-/Quest-App, als 10-Fuß-Layout.
+  räumlich anfühlen. Farbtasten: grün = Guide, gelb = Suche, blau = Favorit.
 
-Noch nicht enthalten (im Gegensatz zur Quest-App): Profile, Favoriten,
-Merklisten, Empfehlungen, Guide-Raster, Kindersicherung, Statistik, Downloads,
-Mini-Player, Themes.
+Nicht enthalten: Profile, Merklisten, Empfehlungen, Statistik, Downloads,
+Mini-Player.
+
+## Was auf dem Gerät gilt
+
+- **Chromium 53.** Der Fernseher kennt weder CSS Grid noch `gap`, `inset` oder
+  `aspect-ratio`. Ein `inset: 0` auf dem Player-Overlay ließ dieses auf Größe
+  null zusammenfallen – der Film lief, war aber unsichtbar. Deshalb: Raster über
+  `inline-block`, Abstände über `margin`, Seitenverhältnisse über den
+  `padding-top`-Trick.
+- **MKV läuft.** `canPlayType("video/x-matroska")` sagt zwar nichts zu, der
+  Fernseher spielt es über seine native Pipeline dennoch ab – auf dem Gerät mit
+  einem 4K-MKV geprüft.
+- **Video ist nicht im Screenshot.** Die Wiedergabe läuft auf einer Hardware-
+  Ebene, die der Browser nicht mitzeichnet: Ein Screenshot des laufenden Films
+  ist schwarz, obwohl auf dem Schirm das Bild steht.
+- **Große Listen** werden bewusst gedeckelt (120 Senderzeilen, 150 Kacheln,
+  Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst ein.
 
 ## Warum ES5-Stil
 
@@ -36,6 +64,19 @@ statt `fetch`. Der Code läuft ohne Build-Schritt direkt so, wie er hier steht.
 export PATH="$HOME/.local/webos-toolchain/node/bin:$PATH"
 node test/core.test.js    # 22 Prüfungen: M3U, Xtream, Sprache, EPG-Zeitstempel
 node test/ui.test.js      # 6 Prüfungen: rendert, Tabs, Fokus, appinfo (jsdom)
+```
+
+## Auf dem Fernseher prüfen
+
+Der webOS-Inspector spricht das Chrome DevTools Protocol – damit lässt sich die
+App auf der echten Hardware fernsteuern und ansehen, statt zu raten:
+
+```sh
+ares-inspect --device tv --app de.app.glasstv     # gibt die ws-Adresse aus
+node tools/tvshot.js  ws://localhost:PORT/... bild.png        # Screenshot + Konsole
+node tools/tvpoke.js  ws://localhost:PORT/... state           # Kurzbericht
+node tools/tvpoke.js  ws://... click ".card" wait 2000 state  # Bedienung simulieren
+node tools/tvpoke.js  ws://... key 461                        # Taste (461 = Zurück)
 ```
 
 `core.test.js` spiegelt die Kotlin-/Swift-Tests, inklusive der teuer erkauften
