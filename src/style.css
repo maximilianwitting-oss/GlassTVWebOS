@@ -337,3 +337,36 @@ button.ghost {
 }
 @-webkit-keyframes spin { to { -webkit-transform: rotate(360deg); } }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ------------------------------------------------------------- Profile ---- */
+
+.gate { text-align: center; padding: 90px 20px; }
+.gate-title { font-size: 44px; font-weight: 800; margin-bottom: 44px; }
+.gate-row { font-size: 0; }
+
+.gate-profile {
+  display: inline-block; vertical-align: top; margin: 0 22px;
+  padding: 12px; border-radius: 20px; cursor: pointer;
+  border: 2px solid transparent;
+  -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
+}
+
+/*
+ * Auf dem Gate umschließt der Fokusring den runden Avatar, nicht den
+ * rechteckigen Container – am Kreis ist er sofort zu sehen, am unsichtbaren
+ * Kasten drumherum kaum.
+ */
+.gate-profile.focusable:focus { box-shadow: none; border-color: transparent; }
+.gate-profile.focusable:focus .gate-avatar {
+  box-shadow: 0 0 0 6px #8c80f7, 0 10px 34px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 6px var(--accent), 0 10px 34px rgba(0, 0, 0, 0.6);
+}
+.gate-profile.focusable:focus .gate-name { font-weight: 700; }
+
+.gate-avatar {
+  width: 132px; height: 132px; line-height: 132px; border-radius: 50%;
+  font-size: 54px; font-weight: 800; color: #fff;
+  margin: 0 auto 14px;
+}
+
+.gate-name { font-size: 22px; }

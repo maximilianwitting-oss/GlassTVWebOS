@@ -26,7 +26,11 @@
     view: null,          // null | {type:'movie'|'series'|'guide'|'search', …}
     group: { live: null, movies: null, series: null },
     favorites: {},       // id -> true
-    progress: {},        // id -> { position, duration, updatedAt, title, url, image, kind }
+    watchlist: {},       // id -> true („Meine Liste")
+    progress: {},        // id -> { position, duration, updatedAt, title, url, image, kind, group }
+    profiles: [],        // [{ id, name, color }]
+    activeProfile: 'default',
+    gate: false,         // „Wer schaut?" wird gerade gezeigt
     settings: {
       languages: [], strict: true, design: 'midnight', accent: 'violet', sort: 'standard',
       pin: null, lockedGroups: [], hiddenGroups: [],
@@ -54,6 +58,25 @@
       var raw = localStorage.getItem('glasstv.' + key);
       return raw ? JSON.parse(raw) : fallback;
     } catch (e) { return fallback; }
+  }
+
+  /**
+   * Schlüssel für profilbezogene Daten. Das Hauptprofil behält bewusst die
+   * alten, unbenannten Schlüssel – so behalten bestehende Installationen ihre
+   * Favoriten und ihren Verlauf, ohne dass etwas migriert werden muss.
+   */
+  function scoped(key) {
+    return state.activeProfile === 'default' ? key : key + '.' + state.activeProfile;
+  }
+
+  function saveScoped(key, value) { save(scoped(key), value); }
+  function loadScoped(key, fallback) { return load(scoped(key), fallback); }
+
+  /** Profildaten neu einlesen (nach Wechsel oder Anlegen). */
+  function loadProfileData() {
+    state.favorites = loadScoped('favorites', {}) || {};
+    state.progress = loadScoped('progress', {}) || {};
+    state.watchlist = loadScoped('watchlist', {}) || {};
   }
 
   // ------------------------------------------------------------ Netz ----
@@ -99,6 +122,24 @@
     }
     var target = inContent.length ? inContent[0] : focusables[0];
     if (target) target.focus();
+  }
+
+  /**
+   * Fokus nur setzen, wenn gerade keiner auf einem bedienbaren Element liegt.
+   *
+   * Wichtig aus zwei Gründen: Ohne Fokus sieht man auf dem Fernseher nicht,
+   * wo man ist, und muss blind eine Taste drücken. Umgekehrt darf ein
+   * Neuaufbau (z. B. wenn das EPG nachlädt) den Fokus NICHT an den Anfang
+   * zurückreißen, während man gerade durch die Liste wandert.
+   */
+  function ensureFocus() {
+    collectFocusables();
+    var a = document.activeElement;
+    if (a && focusables.indexOf(a) >= 0) {
+      var r = a.getBoundingClientRect();
+      if (r.width > 0 || r.height > 0) return;
+    }
+    focusFirst();
   }
 
   function moveFocus(dx, dy) {
@@ -238,10 +279,18 @@
 
   function isFavorite(id) { return !!state.favorites[id]; }
 
+  function onWatchlist(id) { return !!state.watchlist[id]; }
+
+  function toggleWatchlist(id) {
+    if (state.watchlist[id]) delete state.watchlist[id];
+    else state.watchlist[id] = true;
+    saveScoped('watchlist', state.watchlist);
+  }
+
   function toggleFavorite(id) {
     if (state.favorites[id]) delete state.favorites[id];
     else state.favorites[id] = true;
-    save('favorites', state.favorites);
+    saveScoped('favorites', state.favorites);
   }
 
 
@@ -348,6 +397,133 @@
     return copy;
   }
 
+
+  // ------------------------------------------------------ Empfehlungen ----
+
+  /**
+   * Gewichtet Kategorien nach dem Verlauf (iOS: groupAffinity).
+   * Jüngeres zählt mehr – Recency-Decay 1/(1+Tage/7). Ohne den Abfall
+   * bestimmt für immer, was man einmal vor einem halben Jahr gesehen hat.
+   */
+  function groupAffinity() {
+    var scores = {};
+    var now = Date.now();
+    var list = progressList();
+    for (var i = 0; i < list.length; i++) {
+      var g = list[i].group;
+      if (!g) continue;
+      var days = (now - list[i].updatedAt) / 86400000;
+      scores[g] = (scores[g] || 0) + 1 / (1 + days / 7);
+    }
+    var pairs = [];
+    for (var key in scores) {
+      if (Object.prototype.hasOwnProperty.call(scores, key)) pairs.push([key, scores[key]]);
+    }
+    pairs.sort(function (a, b) { return b[1] - a[1]; });
+    return pairs.slice(0, 6).map(function (p) { return p[0]; });
+  }
+
+  /** Titel aus den Lieblingskategorien, die noch nicht angesehen wurden. */
+  function recommendations(items, idKey, limit) {
+    var groups = groupAffinity();
+    if (!groups.length) return [];
+    var out = [];
+    for (var i = 0; i < items.length && out.length < (limit || 20); i++) {
+      var it = items[i];
+      if (groups.indexOf(it.group) < 0) continue;
+      if (state.progress[it.id]) continue;      // schon gesehen
+      out.push(it);
+    }
+    return out;
+  }
+
+  /** „Weil du X geschaut hast" – jüngster Titel mit Kategorie, ab 3 Treffern. */
+  function becauseYouWatched() {
+    var list = progressList();
+    var seed = null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].kind !== 'live' && list[i].group) { seed = list[i]; break; }
+    }
+    if (!seed) return null;
+    var pool = [];
+    for (var j = 0; j < state.library.movies.length && pool.length < 20; j++) {
+      var m = state.library.movies[j];
+      if (m.group === seed.group && m.id !== seed.id) pool.push(m);
+    }
+    if (pool.length < 3) return null;
+    return { title: seed.title, items: pool };
+  }
+
+  // ---------------------------------------------------------- Profile ----
+
+  var PROFILE_COLORS = ['#8c80f7', '#3359d9', '#e0567b', '#2c9c88', '#e9a23b', '#7e57c2'];
+
+  function loadProfiles() {
+    var list = load('profiles', null);
+    if (!list || !list.length) {
+      list = [{ id: 'default', name: 'Hauptprofil', color: 0 }];
+      save('profiles', list);
+    }
+    state.profiles = list;
+  }
+
+  function addProfile(name) {
+    var id = 'p' + Date.now();
+    state.profiles.push({ id: id, name: name, color: state.profiles.length % PROFILE_COLORS.length });
+    save('profiles', state.profiles);
+    return id;
+  }
+
+  function deleteProfile(id) {
+    if (id === 'default') return;      // Hauptprofil bleibt
+    state.profiles = state.profiles.filter(function (p) { return p.id !== id; });
+    save('profiles', state.profiles);
+    try {
+      localStorage.removeItem('glasstv.favorites.' + id);
+      localStorage.removeItem('glasstv.progress.' + id);
+      localStorage.removeItem('glasstv.watchlist.' + id);
+    } catch (e) { /* egal */ }
+    if (state.activeProfile === id) switchProfile('default');
+  }
+
+  function switchProfile(id) {
+    state.activeProfile = id;
+    save('activeProfile', id);
+    loadProfileData();
+  }
+
+  function profileName(id) {
+    for (var i = 0; i < state.profiles.length; i++) {
+      if (state.profiles[i].id === id) return state.profiles[i].name;
+    }
+    return 'Profil';
+  }
+
+  /** „Wer schaut?" – Netflix-Stil, nur wenn es mehr als ein Profil gibt. */
+  function renderGate() {
+    var wrap = element('div', 'gate');
+    wrap.appendChild(element('div', 'gate-title', 'Wer schaut?'));
+    var row = element('div', 'gate-row');
+    for (var i = 0; i < state.profiles.length; i++) {
+      (function (p) {
+        var item = element('div', 'gate-profile focusable');
+        item.tabIndex = 0;
+        var av = element('div', 'gate-avatar', (p.name.charAt(0) || '?').toUpperCase());
+        av.style.background = PROFILE_COLORS[p.color % PROFILE_COLORS.length];
+        item.appendChild(av);
+        item.appendChild(element('div', 'gate-name', p.name));
+        item.onclick = function () {
+          switchProfile(p.id);
+          state.gate = false;
+          render();
+        };
+        row.appendChild(item);
+      })(state.profiles[i]);
+    }
+    wrap.appendChild(row);
+    el.content.appendChild(wrap);
+  }
+
   // ----------------------------------------------------------- Seiten ----
 
   function render() {
@@ -355,6 +531,7 @@
     clear(el.content);
 
     if (state.loading) { el.content.appendChild(element('div', 'spinner')); return; }
+    if (state.gate) { renderGate(); setTimeout(focusFirst, 0); return; }
     if (!state.source) { renderSetup(); return; }
 
     if (state.view) {
@@ -369,7 +546,10 @@
     else if (state.tab === 'series') renderSeriesList();
     else renderFavorites();
 
-    setTimeout(focusFirst, 0);
+    setTimeout(ensureFocus, 0);
+    // Zweiter Anlauf: Beim ersten Aufbau sind Bilder/Layout noch nicht fertig,
+    // ein Fokus auf ein Element der Größe null greift nicht.
+    setTimeout(ensureFocus, 350);
   }
 
   function renderTabs() {
@@ -378,7 +558,11 @@
       (function (t) {
         var active = !state.view && state.tab === t.id;
         var b = element('button', 'tab focusable' + (active ? ' active' : ''), t.label);
-        b.onclick = function () { state.tab = t.id; state.view = null; render(); };
+        b.onclick = function () {
+          state.tab = t.id; state.view = null;
+          render();
+          setTimeout(focusFirst, 0);
+        };
         el.tabs.appendChild(b);
       })(TABS[i]);
     }
@@ -401,7 +585,8 @@
       var s1 = shelf('Weiterschauen', cont, function (p) {
         var rest = Math.max(1, Math.round((p.duration - p.position) / 60));
         var c = card(p.title, p.image, function () {
-          playItem(p.title, p.url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position);
+          playItem(p.title, p.url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position, null,
+            { image: p.image, group: p.group });
         }, true);
         c.appendChild(progressBar(p.position / p.duration));
         return c;
@@ -427,6 +612,36 @@
       return c;
     });
     if (s2) el.content.appendChild(s2);
+
+    // Merkliste vor den allgemeinen Regalen – bewusst Gemerktes zuerst.
+    var listItems = lib.movies.filter(function (m) { return onWatchlist(m.id); })
+      .concat(lib.series.filter(function (x) { return onWatchlist(x.id); }));
+    var sList = shelf('Meine Liste', listItems, function (it) {
+      return card(it.title, it.posterURL, function () {
+        if (it.episodes !== undefined) openSeries(it); else openMovie(it);
+      });
+    });
+    if (sList) el.content.appendChild(sList);
+
+    var forYou = recommendations(lib.movies, 'id', 20);
+    var sFor = shelf('Für dich', forYou, function (m) {
+      return card(m.title, m.posterURL, function () { openMovie(m); });
+    });
+    if (sFor) el.content.appendChild(sFor);
+
+    var because = becauseYouWatched();
+    if (because) {
+      var sBec = shelf('Weil du „' + because.title + '" gesehen hast', because.items, function (m) {
+        return card(m.title, m.posterURL, function () { openMovie(m); });
+      });
+      if (sBec) el.content.appendChild(sBec);
+    }
+
+    var forYouSeries = recommendations(lib.series, 'id', 20);
+    var sForS = shelf('Serien für dich', forYouSeries, function (x) {
+      return card(x.title, x.posterURL, function () { openSeries(x); });
+    });
+    if (sForS) el.content.appendChild(sForS);
 
     var s3 = shelf('Filme', lib.movies.slice(0, 30), function (m) {
       return card(m.title, m.posterURL, function () { openMovie(m); });
@@ -597,9 +812,12 @@
     var favMovies = lib.movies.filter(function (m) { return isFavorite(m.id); });
     var favSeries = lib.series.filter(function (s) { return isFavorite(s.id); });
 
-    if (!favChannels.length && !favMovies.length && !favSeries.length) {
-      return renderEmpty('Noch keine Favoriten',
-        'Markiere Sender oder Titel mit der blauen Taste bzw. auf der Detailseite.');
+    var anyList = lib.movies.some(function (m) { return onWatchlist(m.id); }) ||
+      lib.series.some(function (x) { return onWatchlist(x.id); });
+    if (!favChannels.length && !favMovies.length && !favSeries.length && !anyList) {
+      return renderEmpty('Noch nichts gemerkt',
+        'Markiere Sender mit der blauen Taste oder setze Titel auf der Detailseite ' +
+        'auf „Meine Liste".');
     }
     if (favChannels.length) {
       el.content.appendChild(element('div', 'section-title', 'Sender'));
@@ -615,6 +833,15 @@
       return card(s.title, s.posterURL, function () { openSeries(s); });
     });
     if (s2) el.content.appendChild(s2);
+
+    var listItems = lib.movies.filter(function (m) { return onWatchlist(m.id); })
+      .concat(lib.series.filter(function (x) { return onWatchlist(x.id); }));
+    var s3 = shelf('Meine Liste', listItems, function (it) {
+      return card(it.title, it.posterURL, function () {
+        if (it.episodes !== undefined) openSeries(it); else openMovie(it);
+      });
+    });
+    if (s3) el.content.appendChild(s3);
   }
 
   // ---- Detailseiten ----
@@ -680,18 +907,24 @@
       (resume.position / resume.duration) < 0.95;
     if (canResume) {
       actions.appendChild(button('▶ Weiter ab ' + durationText(resume.position), function () {
-        playItem(m.title, m.streamURL, m.group, 'movie', m.id, resume.position);
+        playItem(m.title, m.streamURL, m.group, 'movie', m.id, resume.position, null,
+          { image: m.posterURL, group: m.group });
       }));
       actions.appendChild(button('Von vorn', function () {
-        playItem(m.title, m.streamURL, m.group, 'movie', m.id, 0);
+        playItem(m.title, m.streamURL, m.group, 'movie', m.id, 0, null,
+          { image: m.posterURL, group: m.group });
       }, true));
     } else {
       actions.appendChild(button('▶ Abspielen', function () {
-        playItem(m.title, m.streamURL, m.group, 'movie', m.id, 0);
+        playItem(m.title, m.streamURL, m.group, 'movie', m.id, 0, null,
+          { image: m.posterURL, group: m.group });
       }));
     }
     actions.appendChild(button(isFavorite(m.id) ? '★ Favorit' : '☆ Favorit', function () {
       toggleFavorite(m.id); render();
+    }, true));
+    actions.appendChild(button(onWatchlist(m.id) ? '✓ Auf meiner Liste' : '+ Meine Liste', function () {
+      toggleWatchlist(m.id); render();
     }, true));
     el.content.appendChild(actions);
 
@@ -743,6 +976,9 @@
     var actions = element('div', 'detail-actions');
     actions.appendChild(button(isFavorite(s.id) ? '★ Favorit' : '☆ Favorit', function () {
       toggleFavorite(s.id); render();
+    }, true));
+    actions.appendChild(button(onWatchlist(s.id) ? '✓ Auf meiner Liste' : '+ Meine Liste', function () {
+      toggleWatchlist(s.id); render();
     }, true));
     el.content.appendChild(actions);
 
@@ -798,7 +1034,8 @@
         row.appendChild(info);
         row.onclick = function () {
           playItem(s.title + ' · ' + label, ep.streamURL, ep.title, 'episode', ep.id,
-            p ? p.position : 0, { series: s, episode: ep });
+            p ? p.position : 0, { series: s, episode: ep },
+            { image: ep.imageURL || s.posterURL, group: s.group });
         };
         box.appendChild(row);
       })(eps[k]);
@@ -923,16 +1160,68 @@
     actions.appendChild(button('Quelle ändern', function () {
       state.source = null; state.view = null; render();
     }, true));
-    actions.appendChild(button('Favoriten löschen', function () {
-      state.favorites = {}; save('favorites', state.favorites);
+    actions.appendChild(button('Favoriten löschen (dieses Profil)', function () {
+      state.favorites = {}; saveScoped('favorites', state.favorites);
       toast('Favoriten gelöscht.');
     }, true));
-    actions.appendChild(button('Verlauf löschen', function () {
-      state.progress = {}; save('progress', state.progress);
+    actions.appendChild(button('Verlauf löschen (dieses Profil)', function () {
+      state.progress = {}; saveScoped('progress', state.progress);
       toast('Verlauf gelöscht.');
     }, true));
     panel.appendChild(actions);
     el.content.appendChild(panel);
+
+    // ---- Profile ----
+    el.content.appendChild(element('div', 'section-title',
+      'Profile (aktiv: ' + profileName(state.activeProfile) + ')'));
+    var profileBox = element('div', 'chips');
+    for (var pi = 0; pi < state.profiles.length; pi++) {
+      (function (prof) {
+        var active = prof.id === state.activeProfile;
+        var c = element('span', 'chip focusable' + (active ? ' active' : ''),
+          (active ? '● ' : '') + prof.name);
+        c.tabIndex = 0;
+        c.onclick = function () { switchProfile(prof.id); render(); };
+        profileBox.appendChild(c);
+      })(state.profiles[pi]);
+    }
+    el.content.appendChild(profileBox);
+
+    var profActions = element('div', 'actions');
+    profActions.appendChild(button('Profil hinzufügen', function () {
+      state.view.addProfile = !state.view.addProfile; render();
+    }, true));
+    if (state.activeProfile !== 'default') {
+      profActions.appendChild(button('Aktives Profil löschen', function () {
+        deleteProfile(state.activeProfile);
+        render();
+      }, true));
+    }
+    if (state.profiles.length > 1) {
+      profActions.appendChild(button('Profil wechseln', function () {
+        state.gate = true; state.view = null; render();
+      }, true));
+    }
+    el.content.appendChild(profActions);
+
+    if (state.view.addProfile) {
+      var newPanel = element('div', 'panel');
+      newPanel.appendChild(element('label', null, 'Name des neuen Profils'));
+      var nameInput = element('input', 'focusable');
+      newPanel.appendChild(nameInput);
+      var newActions = element('div', 'actions');
+      newActions.appendChild(button('Anlegen', function () {
+        var v = (nameInput.value || '').replace(/^\s+|\s+$/g, '');
+        if (!v) return toast('Bitte einen Namen eingeben.');
+        var id = addProfile(v);
+        state.view.addProfile = false;
+        switchProfile(id);
+        toast('Profil „' + v + '" angelegt.');
+        render();
+      }));
+      newPanel.appendChild(newActions);
+      el.content.appendChild(newPanel);
+    }
 
     // ---- Design ----
     el.content.appendChild(element('div', 'section-title', 'Design'));
@@ -1341,10 +1630,12 @@
 
   function playChannel(ch) {
     var now = Core.nowProgram(programsFor(ch));
-    playItem(ch.name, ch.streamURL, now ? now.title : ch.group, 'live', ch.id, 0, { channel: ch });
+    playItem(ch.name, ch.streamURL, now ? now.title : ch.group, 'live', ch.id, 0,
+      { channel: ch }, { image: ch.logoURL, group: ch.group });
   }
 
-  function playItem(title, url, subtitle, kind, id, resumeSeconds, context) {
+  function playItem(title, url, subtitle, kind, id, resumeSeconds, context, meta) {
+    player.meta = meta || {};
     player.open = true;
     player.kind = kind;
     player.id = id;
@@ -1399,12 +1690,17 @@
 
   function saveProgress(position, duration) {
     if (!player.id || player.kind === 'live') return;
+    var prev = state.progress[player.id] || {};
     state.progress[player.id] = {
       id: player.id, kind: player.kind, title: player.title,
       url: el.video.currentSrc || el.video.src,
-      image: null, position: position, duration: duration, updatedAt: Date.now(),
+      // Poster und Kategorie kommen vom Aufrufer: ohne sie hätte
+      // „Weiterschauen" kein Bild und die Empfehlungen keine Grundlage.
+      image: (player.meta && player.meta.image) || prev.image || null,
+      group: (player.meta && player.meta.group) || prev.group || null,
+      position: position, duration: duration, updatedAt: Date.now(),
     };
-    save('progress', state.progress);
+    saveScoped('progress', state.progress);
   }
 
   function closePlayer() {
@@ -1448,7 +1744,8 @@
       if (eps[i].id === cur.id) {
         var nx = eps[i + 1];
         playItem(s.title + ' · S' + two(nx.season) + 'E' + two(nx.episode),
-          nx.streamURL, nx.title, 'episode', nx.id, 0, { series: s, episode: nx });
+          nx.streamURL, nx.title, 'episode', nx.id, 0, { series: s, episode: nx },
+          { image: nx.imageURL || s.posterURL, group: s.group });
         return true;
       }
     }
@@ -1531,8 +1828,17 @@
       settings: document.getElementById('btn-settings'),
     };
 
-    state.favorites = load('favorites', {}) || {};
-    state.progress = load('progress', {}) || {};
+    loadProfiles();
+    state.activeProfile = load('activeProfile', 'default') || 'default';
+    // Ein gelöschtes Profil darf nicht als aktiv stehenbleiben.
+    var known = false;
+    for (var pi = 0; pi < state.profiles.length; pi++) {
+      if (state.profiles[pi].id === state.activeProfile) known = true;
+    }
+    if (!known) state.activeProfile = 'default';
+    loadProfileData();
+    // „Wer schaut?" nur, wenn es überhaupt etwas zu wählen gibt.
+    state.gate = state.profiles.length > 1;
     var saved = load('settings', null);
     if (saved) {
       state.settings.languages = saved.languages || [];

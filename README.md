@@ -28,12 +28,20 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   abgedunkelten Wohnzimmer.
 - **Sprachfilter** mit demselben Sicherheitsnetz wie iOS, **Kategorien
   ausblenden** und **Kindersicherung** (PIN sperrt Kategorien app-weit).
+- **Profile** mit „Wer schaut?"-Auswahl beim Start (erscheint nur ab dem
+  zweiten Profil). Favoriten, Merkliste und Verlauf sind profilbezogen; das
+  Hauptprofil behält bewusst die alten Speicherschlüssel, damit bestehende
+  Installationen nichts verlieren.
+- **Meine Liste**: eigener Merkzettel neben den Favoriten, als Regal auf der
+  Startseite und im Favoriten-Tab.
+- **Empfehlungen**: „Für dich" und „Weil du … gesehen hast" aus der
+  Kategorie-Affinität des Verlaufs, mit Recency-Decay 1/(1+Tage/7) wie in der
+  iOS-App – ohne den Abfall bestimmt für immer, was man einmal gesehen hat.
 - **Bedienung**: vollständig mit der Fernbedienung. Der Fokus wandert
   *geometrisch* (nicht in DOM-Reihenfolge), damit Raster und Reihen sich
   räumlich anfühlen. Farbtasten: grün = Guide, gelb = Suche, blau = Favorit.
 
-Nicht enthalten: Profile, Merklisten, Empfehlungen, Statistik, Downloads,
-Mini-Player.
+Nicht enthalten: Statistik, Downloads, Mini-Player.
 
 ## Was auf dem Gerät gilt
 
