@@ -262,6 +262,30 @@
    *  - Am Seitenende bewegte sich gar nichts mehr, ohne dass klar war warum.
    *    Jetzt wird in so einem Fall wenigstens weitergescrollt.
    */
+  /**
+   * Erster SICHTBARER Eintrag einer waagerecht scrollbaren Reihe.
+   *
+   * Der erste Eintrag ueberhaupt war falsch, sobald die Reihe gescrollt war:
+   * Wer sich in einem Regal nach rechts gearbeitet hatte, nach oben ging und
+   * wieder zurueckkam, landete bei Eintrag 1 – und `revealFocus` scrollte das
+   * Regal gleich mit an den Anfang. Die Position ging bei jedem senkrechten
+   * Ausflug verloren. Der erste sichtbare loest beide Faelle: Bei einer
+   * ungescrollten Reihe ist er ohnehin der erste.
+   */
+  function ersterSichtbarerIn(reihe) {
+    var kandidaten = reihe.querySelectorAll('.focusable');
+    if (!kandidaten.length) return null;
+    var box = reihe.getBoundingClientRect();
+    for (var i = 0; i < kandidaten.length; i++) {
+      var r = kandidaten[i].getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      // Mindestens zur Haelfte im Sichtbereich – ein halb angeschnittener
+      // Eintrag am linken Rand ist nicht der, den man meint.
+      if (r.right > box.left + r.width * 0.5) return kandidaten[i];
+    }
+    return kandidaten[0];
+  }
+
   function moveFocus(dx, dy) {
     collectFocusables();
     var active = document.activeElement;
@@ -306,7 +330,7 @@
       if (dy !== 0) {
         var zielReihe = scrollParent(best, true);
         if (zielReihe && zielReihe !== activeRow) {
-          var erste = zielReihe.querySelector('.focusable');
+          var erste = ersterSichtbarerIn(zielReihe);
           if (erste) best = erste;
         }
       }
@@ -503,7 +527,10 @@
   function shelf(title, items, builder) {
     if (!items.length) return null;
     var wrap = document.createElement('div');
-    wrap.appendChild(element('div', 'section-title', title));
+    // Die Deckelung benennen: Sonst hielt der Nutzer die uebrigen Eintraege
+    // schlicht fuer nicht vorhanden.
+    wrap.appendChild(element('div', 'section-title',
+      items.length > 30 ? title + ' · 30 von ' + items.length : title));
     var row = element('div', 'row');
     for (var i = 0; i < items.length && i < 30; i++) row.appendChild(builder(items[i]));
     wrap.appendChild(row);
@@ -804,6 +831,7 @@
       // Fehlerrot muss auf dunklem Grund aufhellen: Das feste #b3261e lag auf
       // den dunklen Designs bei 2,3:1 – dunkelrote Schrift auf dunklem Grund.
       root.style.setProperty('--fehler', '#ff8a80');
+      root.style.setProperty('--fokus-schatten', 'rgba(0,0,0,0.55)');
     } else {
       // Auf hellem Grund tragen weiße Schleier nicht – es braucht dunkle.
       root.style.setProperty('--surface', 'rgba(0,0,0,0.045)');
@@ -813,6 +841,9 @@
       root.style.setProperty('--text-dim', '#5a5670');
       root.style.setProperty('--on-accent', '#ffffff');
       root.style.setProperty('--fehler', '#b3261e');
+      // Auf hellem Grund traegt ein kraeftiger Schlagschatten nicht – er wirkt
+      // wie Schmutz unter der Karte statt wie Hervorhebung.
+      root.style.setProperty('--fokus-schatten', 'rgba(0,0,0,0.18)');
     }
 
     document.getElementById('backdrop').style.background =
@@ -1359,13 +1390,26 @@
     renderKategorieChunk(box, art, kategorien, 0, 40, onWahl);
   }
 
+  /**
+   * Erster Buchstabe eines Kategorienamens als Platzhalter.
+   *
+   * Kategorien haben nie ein Logo; das leere graue Feld sah in einer Liste aus
+   * 299 Zeilen durchgehend nach Ladefehler aus. Fuehrende Zusaetze wie „4K -"
+   * werden uebersprungen, damit nicht jede Zeile dasselbe Zeichen traegt.
+   */
+  function initialeVon(name) {
+    var t = String(name || '').replace(/^[^A-Za-z0-9\u00C0-\u024F]+/, '');
+    var m = t.match(/[A-Za-z\u00C0-\u024F0-9]/);
+    return m ? m[0].toUpperCase() : '•';
+  }
+
   function renderKategorieChunk(box, art, kategorien, from, count, onWahl) {
     for (var i = from; i < kategorien.length && i < from + count; i++) {
       (function (kat) {
         var row = element('div', 'channel focusable');
         row.tabIndex = 0;
         row.setAttribute('data-fkey', 'kat:' + art + ':' + kat.id);
-        row.appendChild(element('div', 'logo'));
+        row.appendChild(element('div', 'logo initiale', initialeVon(kat.name)));
         var info = element('div', 'info');
         info.appendChild(element('div', 'name', kat.name));
         var geladen = !!state.katalogCache[katalogSchluessel(art, kat.id)];
@@ -2379,6 +2423,15 @@
       }
       return out;
     }
+
+    /*
+     * Die Suche bricht je Sparte bei 30 Treffern ab – ein Volltreffer-Scan
+     * ueber 142.000 Titel je Tastendruck waere zu teuer. Das muss man sagen,
+     * sonst haelt man die uebrigen Treffer fuer nicht vorhanden.
+     */
+    function spartenTitel(name, treffer, grenze) {
+      return treffer.length >= grenze ? name + ' · erste ' + grenze : name;
+    }
     var ch = search(state.library.channels, 'name', 30);
     var mv, sr;
     if (state.lazyKatalog) {
@@ -2401,17 +2454,17 @@
       return;
     }
     if (ch.length) {
-      el.content.appendChild(element('div', 'section-title', 'Sender'));
+      el.content.appendChild(element('div', 'section-title', spartenTitel('Sender', ch, 30)));
       var box = document.createElement('div');
       for (var i = 0; i < ch.length; i++) box.appendChild(channelRow(ch[i], null));
       el.content.appendChild(box);
     }
-    var s1 = shelf('Filme', mv, function (m) {
-      return card(m.title, m.posterURL, function () { openMovie(m); });
+    var s1 = shelf(spartenTitel('Filme', mv, 30), mv, function (m) {
+      return card(m.title, m.posterURL, function () { openMovie(m); }, false, m.id);
     });
     if (s1) el.content.appendChild(s1);
-    var s2 = shelf('Serien', sr, function (s) {
-      return card(s.title, s.posterURL, function () { openSeries(s); });
+    var s2 = shelf(spartenTitel('Serien', sr, 30), sr, function (s) {
+      return card(s.title, s.posterURL, function () { openSeries(s); }, false, s.id);
     });
     if (s2) el.content.appendChild(s2);
   }
@@ -2429,7 +2482,16 @@
      * zuerst Weissraum.
      */
     if (state.indexLaedt) {
-      return element('div', 'such-status', 'Titelverzeichnis wird aufgebaut …');
+      /*
+       * Mit Spinner: Der Aufbau dauert rund 15 Sekunden. Vorher verschwand der
+       * Knopf und es stand nur eine schmale Zeile da – der Nutzer sah Stille
+       * und drueckte irgendwann OK auf „Zurueck".
+       */
+      var laden = element('div', 'such-status-zeile');
+      laden.appendChild(element('div', 'spinner klein'));
+      laden.appendChild(element('div', 'such-status',
+        'Titelverzeichnis wird aufgebaut – das dauert etwa 15 Sekunden.'));
+      return laden;
     }
     if (state.filmIndex) {
       var box = element('div', 'such-status-zeile');
@@ -2450,8 +2512,11 @@
       'macht alle Filme durchsuchbar; es kostet einmalig etwa 15 Sekunden und ' +
       'rund 13 MB Speicher.'));
     box.appendChild(button('Alle Filme durchsuchbar machen', function () {
+      // Fokus vorbelegen: Der Knopf loest sich beim Aufbau auf, der Merker
+      // liefe sonst ins Leere und der Fokus spraenge auf „Zurueck".
+      focusWuenschen('suchfeld');
       filmIndexAufbauen();
-    }, true));
+    }, true, 'indexbauen'));
     return box;
   }
 
@@ -2828,7 +2893,7 @@
     // ---- Profile ----
     el.content.appendChild(element('div', 'section-title',
       'Profile (aktiv: ' + profileName(state.activeProfile) + ')'));
-    var profileBox = element('div', 'chips');
+    var profileBox = element('div', 'chips umbruch');
     for (var pi = 0; pi < state.profiles.length; pi++) {
       (function (prof) {
         var active = prof.id === state.activeProfile;
@@ -2880,7 +2945,7 @@
 
     // ---- Design ----
     el.content.appendChild(element('div', 'section-title', 'Design'));
-    var designChips = element('div', 'chips');
+    var designChips = element('div', 'chips umbruch');
     for (var i = 0; i < DESIGNS.length; i++) {
       (function (d) {
         var c = element('span', 'chip focusable' + (state.settings.design === d.id ? ' active' : ''), d.name);
@@ -2896,7 +2961,7 @@
     el.content.appendChild(designChips);
 
     el.content.appendChild(element('div', 'section-title', 'Akzentfarbe'));
-    var accentChips = element('div', 'chips');
+    var accentChips = element('div', 'chips umbruch');
     for (var j = 0; j < ACCENTS.length; j++) {
       (function (a) {
         var c = element('span', 'chip focusable' + (state.settings.accent === a.id ? ' active' : ''), a.name);
