@@ -107,6 +107,19 @@ test('Pfeiltasten verschieben den Fokus', function () {
   assert.ok(before);
 });
 
+
+test('Erstfokus meidet Textfelder (Bildschirmtastatur)', function () {
+  // Bekommt ein Textfeld automatisch den Fokus, klappt webOS die
+  // Bildschirmtastatur auf und verdeckt die Seite. Der Fokus muss deshalb auf
+  // dem ersten bedienbaren Element landen, nicht im Feld.
+  var win = boot(null);
+  var doc = win.document;
+  var aktiv = doc.activeElement;
+  assert.ok(aktiv, 'kein Element fokussiert');
+  assert.notStrictEqual(aktiv.tagName, 'INPUT');
+  assert.notStrictEqual(aktiv.tagName, 'TEXTAREA');
+});
+
 test('appinfo.json ist gültig und vollständig', function () {
   var info = JSON.parse(fs.readFileSync(path.join(SRC, 'appinfo.json'), 'utf8'));
   assert.strictEqual(info.id, 'de.app.glasstv');

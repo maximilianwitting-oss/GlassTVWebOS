@@ -15,6 +15,11 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
 - **Start**: Regale für Weiterschauen (mit Restzeit), Jetzt im TV, Filme, Serien.
 - **Quellen**: Xtream Codes (Sender, Filme, Serien, Folgen und Filmdetails auf
   Nachfrage) und M3U/M3U8. Zugangsdaten liegen nur im `localStorage` des Geräts.
+- **Filme und Serien kommen kategorieweise**, nicht am Stück: Beim Start holt die
+  App nur die Kategorienlisten (24 KB statt 58 MB), der Inhalt einer Kategorie
+  folgt beim Öffnen in etwa einer Viertelsekunde. Die drei zuletzt geöffneten
+  Kategorien bleiben im Speicher. Bei M3U-Quellen bleibt es beim bisherigen
+  Verhalten – dort steht ohnehin alles in einer Datei.
 - **Kategorien**: Chips in Live TV, Filmen und Serien; Sortierung nach Name,
   Jahr oder Bewertung.
 - **Detailseiten**: Backdrop, Beschreibung, Regie/Besetzung, Favorit,
@@ -41,8 +46,9 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
 - **Empfehlungen**: „Für dich" und „Weil du … gesehen hast" aus der
   Kategorie-Affinität des Verlaufs, mit Recency-Decay 1/(1+Tage/7) wie in der
   iOS-App – ohne den Abfall bestimmt für immer, was man einmal gesehen hat.
-- **Zurück-Taste** in drei Stufen: Unteransicht → Liste, anderer Tab →
-  Startseite, Startseite → App beenden (über `webOS.platformBack()`).
+- **Zurück-Taste** in Stufen: Unteransicht → Liste, geöffnete Kategorie →
+  Kategorienliste, anderer Tab → Startseite, Startseite → App beenden (über
+  `webOS.platformBack()`).
 - **Magic Remote**: Der Zeiger führt den Fokus – was unter ihm liegt, ist
   fokussiert, damit es weiterhin genau eine Ortsangabe gibt. Bei sichtbarem
   Zeiger wird der Fokusring ruhiger (der Zeiger zeigt die Position ja selbst).
@@ -73,23 +79,38 @@ technisch nicht möglich (siehe unten).
 - **Große Listen** werden bewusst in Blöcken gezeichnet (120 Senderzeilen,
   63 Kacheln, Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst
   ein, und jede sichtbare Kachel kostet ein dekodiertes Bild.
-- **Speicher.** Auf dem Gerät gemessen mit einer Playlist aus 42.000 Sendern,
-  142.000 Filmen und 31.000 Serien:
+- **Speicher.** Auf dem Gerät gemessen mit einer Playlist aus 42.915 Sendern,
+  142.246 Filmen und 31.569 Serien:
 
-  | Posten | vorher | jetzt |
-  |---|---|---|
-  | JS-Heap | 117 MB | 82 MB |
-  | dekodierte Bilder | 242 MB | 61 MB |
-  | Kacheln je Ansicht | 150 | 63 |
+  | Posten | ursprünglich | 1.14 | jetzt |
+  |---|---|---|---|
+  | Prozess gesamt | — | 388 MB | **205 MB** |
+  | JS-Heap nach dem Start | 117 MB | 82 MB | **21 MB** |
+  | bis die Bibliothek steht | — | 72 s | **41 s** |
+  | dekodierte Bilder | 242 MB | 61 MB | 61 MB |
+  | Kacheln je Ansicht | 150 | 63 | 63 |
 
-  Erreicht durch: Xtream-Einträge speichern nur noch die Stream-Nummer statt
-  der vollen Adresse (die steckte zweimal je Eintrag – als Adresse und in der
-  Kennung), Bilder werden in bildschirmgerechter Größe angefordert und nur in
-  der Nähe des Sichtfelds geladen bzw. wieder freigegeben. Der JS-Heap bleibt
-  nach einem Rundgang durch alle Tabs stabil – kein Leck. Der Prozess-Gesamt-
-  wert liegt dennoch bei rund 400 MB; der Rest ist Browser-Cache und Renderer,
-  auf die eine Web-App keinen direkten Zugriff hat. Bei kleineren Playlisten
-  liegt der Wert entsprechend niedriger.
+  Drei Schritte führen dahin. Erstens speichern Xtream-Einträge nur die
+  Stream-Nummer statt der vollen Adresse (die steckte zweimal je Eintrag – als
+  Adresse und in der Kennung). Zweitens werden Bilder in bildschirmgerechter
+  Größe angefordert und nur in der Nähe des Sichtfelds geladen bzw. wieder
+  freigegeben. Drittens – der große Sprung – kommen Filme und Serien
+  kategorieweise statt am Stück: Die Antwort auf `get_vod_streams` ist bei
+  dieser Playlist **58 MB**, die Kategorienliste dagegen **24 KB**. Der JS-Heap
+  bleibt nach einem Rundgang durch alle Tabs stabil – kein Leck. Was vom
+  Prozesswert übrig bleibt, sind Browser-Cache und Renderer sowie die 42.915
+  Sender, die für Zapping und Programmführer geladen bleiben müssen.
+- **Suche über alle Filme ist zuschaltbar.** Ohne die Filme im Speicher sucht die
+  App zunächst in den geöffneten Kategorien. Ein Knopf im Suchbildschirm baut
+  ein Titelverzeichnis über den ganzen Katalog auf: 142.246 Titel für rund
+  15 MB. Es entsteht **ohne `JSON.parse`** – der volle Objektgraph war der
+  eigentliche Kostentreiber. Stattdessen liest ein Scanner Name, Stream-Nummer,
+  Kategorie und Dateiendung direkt aus dem Antworttext. Gegen `JSON.parse`
+  geprüft: **0 Abweichungen über alle 142.246 Einträge**. Datensatzgrenzen
+  laufen über die echten Objektklammern und nicht über ein Feld – der Name
+  steht vor `stream_id`, Kategorie und Endung dahinter, sodass ein Schnitt am
+  Feld jeden Eintrag Werte seines Nachbarn erben ließe. Strings werden dabei
+  übersprungen, damit eine Klammer im Filmtitel keine Grenze vortäuscht.
 - **Kein Mini-Player.** Das Video liegt auf einer Hardware-Ebene, die sich
   nicht verkleinern lässt: Schrumpft man das `<video>` per CSS, läuft der Ton
   weiter und das Bild bleibt schwarz. Die naheliegende Abhilfe – die Videoebene
@@ -113,8 +134,8 @@ statt `fetch`. Der Code läuft ohne Build-Schritt direkt so, wie er hier steht.
 
 ```sh
 export PATH="$HOME/.local/webos-toolchain/node/bin:$PATH"
-node test/core.test.js    # 22 Prüfungen: M3U, Xtream, Sprache, EPG-Zeitstempel
-node test/ui.test.js      # 6 Prüfungen: rendert, Tabs, Fokus, appinfo (jsdom)
+node test/core.test.js    # 36 Prüfungen: M3U, Xtream, Sprache, EPG, Titelindex
+node test/ui.test.js      # 7 Prüfungen: rendert, Tabs, Fokus, appinfo (jsdom)
 ```
 
 ## Auf dem Fernseher prüfen

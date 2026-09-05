@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.14.0';
+  var APP_VERSION = '1.15.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -26,6 +26,23 @@
     loading: false,
     view: null,          // null | {type:'movie'|'series'|'guide'|'search', …}
     group: { live: null, movies: null, series: null },
+    /*
+     * Bedarfsweises Laden (nur Xtream): Die Filmliste eines großen Panels ist
+     * zweistellige Megabyte groß und belegte im Speicher rund 50 MB. Die
+     * Kategorienliste dagegen sind 24 KB, eine einzelne Kategorie lädt in
+     * einer Viertelsekunde. Deshalb werden Filme und Serien erst geholt, wenn
+     * eine Kategorie geöffnet wird.
+     */
+    lazyKatalog: false,
+    katWahl: { movies: null, series: null },
+    katSuche: { m: '', s: '' },
+    filmIndex: null,        // schlanker Titelindex, nur auf Wunsch
+    indexLaedt: false,
+    vodKategorien: [],      // [{ id, name }]
+    serienKategorien: [],
+    katalogCache: {},       // "m:123" -> [items]
+    katalogReihe: [],       // Zugriffsreihenfolge für die Verdrängung
+    katalogLaedt: null,
     favorites: {},       // id -> true
     watchlist: {},       // id -> true („Meine Liste")
     progress: {},        // id -> { position, duration, updatedAt, title, url, image, kind, group }
@@ -141,11 +158,22 @@
 
   function focusFirst() {
     collectFocusables();
-    var inContent = [];
+    var inContent = [], ersteEingabe = null;
     for (var i = 0; i < focusables.length; i++) {
-      if (el.content.contains(focusables[i])) inContent.push(focusables[i]);
+      if (!el.content.contains(focusables[i])) continue;
+      /*
+       * Textfelder werden beim automatischen Erstfokus uebersprungen: Bekommt
+       * ein Feld den Fokus, klappt webOS die Bildschirmtastatur auf und
+       * verdeckt die halbe Seite – bei der Kategorienliste passierte das nach
+       * jedem Zurueckkehren. Wer suchen will, waehlt das Feld selbst an.
+       */
+      if (focusables[i].tagName === 'INPUT' || focusables[i].tagName === 'TEXTAREA') {
+        if (!ersteEingabe) ersteEingabe = focusables[i];
+        continue;
+      }
+      inContent.push(focusables[i]);
     }
-    var target = inContent.length ? inContent[0] : focusables[0];
+    var target = inContent.length ? inContent[0] : (ersteEingabe || focusables[0]);
     if (target) { target.focus(); revealFocus(target); }
   }
 
@@ -503,6 +531,13 @@
   /** Eintrag anhand seiner Kennung in der Bibliothek finden. */
   function findById(id) {
     var lists = [state.library.channels, state.library.movies, state.library.series];
+    // Bei bedarfsweisem Laden liegen Filme und Serien nicht in der Bibliothek,
+    // sondern in den zuletzt geöffneten Kategorien.
+    for (var k in state.katalogCache) {
+      if (Object.prototype.hasOwnProperty.call(state.katalogCache, k)) {
+        lists.push(state.katalogCache[k]);
+      }
+    }
     for (var l = 0; l < lists.length; l++) {
       for (var i = 0; i < lists[l].length; i++) if (lists[l][i].id === id) return lists[l][i];
     }
@@ -778,9 +813,10 @@
       if (list[i].kind !== 'live' && list[i].group) { seed = list[i]; break; }
     }
     if (!seed) return null;
+    var quelle = state.lazyKatalog ? geladeneFilme() : state.library.movies;
     var pool = [];
-    for (var j = 0; j < state.library.movies.length && pool.length < 20; j++) {
-      var m = state.library.movies[j];
+    for (var j = 0; j < quelle.length && pool.length < 20; j++) {
+      var m = quelle[j];
       if (m.group === seed.group && m.id !== seed.id) pool.push(m);
     }
     if (pool.length < 3) return null;
@@ -1014,6 +1050,160 @@
     }
   }
 
+
+  // ------------------------------------------- Katalog bei Bedarf ----
+
+  /** Alle Filme aus den derzeit geladenen Kategorien. */
+  function geladeneFilme() { return ausCacheSammeln('m'); }
+  /** Alle Serien aus den derzeit geladenen Kategorien. */
+  function geladeneSerien() { return ausCacheSammeln('s'); }
+
+  function ausCacheSammeln(art) {
+    var out = [];
+    for (var k in state.katalogCache) {
+      if (!Object.prototype.hasOwnProperty.call(state.katalogCache, k)) continue;
+      if (k.charAt(0) !== art) continue;
+      var teil = state.katalogCache[k];
+      for (var i = 0; i < teil.length; i++) out.push(teil[i]);
+    }
+    return out;
+  }
+
+
+  /** Wie viele Kategorien gleichzeitig im Speicher bleiben. */
+  var KATALOG_CACHE_MAX = 3;
+
+  function katalogSchluessel(art, katID) { return art + ':' + katID; }
+
+  function katalogAusCache(art, katID) {
+    var k = katalogSchluessel(art, katID);
+    var eintrag = state.katalogCache[k];
+    if (eintrag) {
+      // Zuletzt benutzt nach hinten – die vorderen werden verdrängt.
+      var i = state.katalogReihe.indexOf(k);
+      if (i >= 0) state.katalogReihe.splice(i, 1);
+      state.katalogReihe.push(k);
+    }
+    return eintrag || null;
+  }
+
+  function katalogAblegen(art, katID, items) {
+    var k = katalogSchluessel(art, katID);
+    state.katalogCache[k] = items;
+    state.katalogReihe.push(k);
+    while (state.katalogReihe.length > KATALOG_CACHE_MAX) {
+      var alt = state.katalogReihe.shift();
+      delete state.katalogCache[alt];
+    }
+  }
+
+  /**
+   * Eine Kategorie holen (oder aus dem Zwischenspeicher nehmen).
+   * `art` ist 'm' für Filme oder 's' für Serien.
+   */
+  function katalogLaden(art, katID, katName, fertig) {
+    var vorhanden = katalogAusCache(art, katID);
+    if (vorhanden) { fertig(vorhanden); return; }
+
+    var src = state.source;
+    if (!src || src.kind !== 'xtream') { fertig([]); return; }
+
+    state.katalogLaedt = katName;
+    render();
+
+    var aktion = art === 'm' ? 'get_vod_streams' : 'get_series';
+    var url = Core.xtreamApi(src.host, src.user, src.pass, aktion, { category_id: katID });
+    httpGetJson(url, function (err, json) {
+      state.katalogLaedt = null;
+      if (err || !json) {
+        render();
+        toast('Kategorie konnte nicht geladen werden: ' + (err ? err.message : 'unbekannt'), 7000);
+        return;
+      }
+      var items;
+      try {
+        var kat = {};
+        kat[String(katID)] = katName;
+        items = art === 'm'
+          ? Core.parseVodStreams(json, kat, src.host, src.user, src.pass, 'xtream')
+          : Core.parseSeriesList(json, kat, 'xtream');
+      } catch (e) {
+        render();
+        toast('Kategorie konnte nicht gelesen werden: ' + e.message, 7000);
+        return;
+      }
+      // Sprachfilter und Sperren gelten auch hier.
+      items = katalogFiltern(items);
+      katalogAblegen(art, katID, items);
+      fertig(items);
+    }, 60000);
+  }
+
+  /** Dieselben Regeln wie für die Hauptbibliothek auf einen Nachschub anwenden. */
+  function katalogFiltern(items) {
+    var blockiert = state.settings.hiddenGroups.slice();
+    if (state.settings.pin && !state.unlocked) {
+      blockiert = blockiert.concat(state.settings.lockedGroups);
+    }
+    var set = {};
+    for (var b = 0; b < blockiert.length; b++) set[blockiert[b]] = true;
+    var out = [];
+    for (var i = 0; i < items.length; i++) {
+      if (set[items[i].group]) continue;
+      out.push(items[i]);
+    }
+    if (!state.settings.languages.length) return out;
+    var hilfs = { channels: [], movies: out, series: [] };
+    return Core.filterByLanguage(hilfs, state.settings.languages, state.settings.strict).movies;
+  }
+
+  /** Kategorien als Liste – der Einstieg, wenn nicht alles im Speicher liegt. */
+  function renderKategorienListe(art, kategorien, onWahl) {
+    if (!kategorien.length) {
+      return renderEmpty('Keine Kategorien',
+        'Die Quelle hat für diesen Bereich keine Kategorien geliefert.');
+    }
+    el.content.appendChild(element('div', 'section-title',
+      kategorien.length + (art === 'm' ? ' Filmkategorien' : ' Serienkategorien')));
+    el.content.appendChild(element('div', 'detail-meta',
+      'Wähle eine Kategorie – sie wird dann geladen. So bleibt der Speicher ' +
+      'des Fernsehers frei für die Wiedergabe.'));
+
+    var box = element('div', 'katliste');
+    renderKategorieChunk(box, art, kategorien, 0, 40, onWahl);
+    el.content.appendChild(box);
+  }
+
+  function renderKategorieChunk(box, art, kategorien, from, count, onWahl) {
+    for (var i = from; i < kategorien.length && i < from + count; i++) {
+      (function (kat) {
+        var row = element('div', 'channel focusable');
+        row.tabIndex = 0;
+        row.setAttribute('data-fkey', 'kat:' + art + ':' + kat.id);
+        row.appendChild(element('div', 'logo'));
+        var info = element('div', 'info');
+        info.appendChild(element('div', 'name', kat.name));
+        var geladen = !!state.katalogCache[katalogSchluessel(art, kat.id)];
+        info.appendChild(element('div', 'sub', geladen ? 'geladen' : 'antippen zum Laden'));
+        row.appendChild(info);
+        row.onclick = function () { onWahl(kat); };
+        box.appendChild(row);
+      })(kategorien[i]);
+    }
+    if (from + count < kategorien.length) {
+      var rest = kategorien.length - from - count;
+      var mehr = button('Weitere ' + Math.min(count, rest) + ' Kategorien', function () {
+        box.removeChild(mehr);
+        var ersteNeue = box.childNodes.length;
+        renderKategorieChunk(box, art, kategorien, from + count, count, onWahl);
+        collectFocusables();
+        var node = box.childNodes[ersteNeue];
+        if (node && node.focus) { node.focus(); revealFocus(node); }
+      }, true);
+      box.appendChild(mehr);
+    }
+  }
+
   // ----------------------------------------------------------- Seiten ----
 
   function render() {
@@ -1147,17 +1337,42 @@
     });
     if (sForS) el.content.appendChild(sForS);
 
-    var s3 = shelf('Filme', lib.movies.slice(0, 30), function (m) {
-      return card(m.title, m.posterURL, function () { openMovie(m); });
-    });
+    var filme = state.lazyKatalog ? geladeneFilme() : lib.movies;
+    var serien = state.lazyKatalog ? geladeneSerien() : lib.series;
+
+    var s3 = shelf(state.lazyKatalog ? 'Zuletzt geöffnete Filme' : 'Filme',
+      filme.slice(0, 30), function (m) {
+        return card(m.title, m.posterURL, function () { openMovie(m); });
+      });
     if (s3) el.content.appendChild(s3);
 
-    var s4 = shelf('Serien', lib.series.slice(0, 30), function (s) {
-      return card(s.title, s.posterURL, function () { openSeries(s); });
-    });
+    var s4 = shelf(state.lazyKatalog ? 'Zuletzt geöffnete Serien' : 'Serien',
+      serien.slice(0, 30), function (x) {
+        return card(x.title, x.posterURL, function () { openSeries(x); });
+      });
     if (s4) el.content.appendChild(s4);
 
-    if (!cont.length && !live.length && !lib.movies.length && !lib.series.length) {
+    // Ohne geöffnete Kategorie hätte die Startseite sonst nur Live-Inhalte –
+    // deshalb hier der Einstieg in die Kategorien.
+    if (state.lazyKatalog && !filme.length && !serien.length &&
+        (state.vodKategorien.length || state.serienKategorien.length)) {
+      el.content.appendChild(element('div', 'section-title', 'Filme und Serien'));
+      el.content.appendChild(element('div', 'detail-meta',
+        state.vodKategorien.length + ' Film- und ' + state.serienKategorien.length +
+        ' Serienkategorien stehen bereit. Sie werden einzeln geladen, damit der ' +
+        'Fernseher nicht den ganzen Katalog im Speicher halten muss.'));
+      var einstieg = element('div', 'detail-actions');
+      einstieg.appendChild(button('Zu den Filmen', function () {
+        state.tab = 'movies'; state.view = null; render();
+      }, true));
+      einstieg.appendChild(button('Zu den Serien', function () {
+        state.tab = 'series'; state.view = null; render();
+      }, true));
+      el.content.appendChild(einstieg);
+    }
+
+    if (!cont.length && !live.length && !filme.length && !serien.length &&
+        !state.vodKategorien.length && !state.serienKategorien.length) {
       renderEmpty('Nichts geladen', 'Die Quelle hat keine Inhalte geliefert.');
     }
   }
@@ -1331,6 +1546,7 @@
   // ---- Filme / Serien ----
 
   function renderMovies() {
+    if (state.lazyKatalog) return renderLazyKatalog('m');
     var all = state.library.movies;
     if (!all.length) return renderEmpty('Keine Filme', 'Die Quelle hat keine Filme geliefert.');
 
@@ -1353,6 +1569,7 @@
   }
 
   function renderSeriesList() {
+    if (state.lazyKatalog) return renderLazyKatalog('s');
     var all = state.library.series;
     if (!all.length) return renderEmpty('Keine Serien', 'Die Quelle hat keine Serien geliefert.');
 
@@ -1370,6 +1587,104 @@
     var grid = element('div', 'grid');
     renderGridChunk(grid, list, 0, 63, function (x) { openSeries(x); });
     el.content.appendChild(grid);
+  }
+
+  /**
+   * Filme bzw. Serien, wenn der Katalog erst bei Bedarf kommt: erst die
+   * Kategorien, nach der Wahl deren Inhalt.
+   */
+  function renderLazyKatalog(art) {
+    var alle = art === 'm' ? state.vodKategorien : state.serienKategorien;
+    // Ausgeblendetes und Gesperrtes darf hier gar nicht erst auftauchen –
+    // sonst führte die Kindersicherung nur zu einer leeren Kategorie.
+    var kategorien = [];
+    for (var ki = 0; ki < alle.length; ki++) {
+      if (kategorieErlaubt(alle[ki].name)) kategorien.push(alle[ki]);
+    }
+    var wahl = art === 'm' ? state.katWahl.movies : state.katWahl.series;
+
+    if (state.katalogLaedt) {
+      return renderEmpty('„' + state.katalogLaedt + '" wird geladen …',
+        'Einen Moment – die Kategorie kommt direkt vom Panel.');
+    }
+
+    if (!wahl) {
+      var frei = kategorien;
+      if (state.katSuche[art]) {
+        var q = state.katSuche[art].toLowerCase();
+        frei = [];
+        for (var i = 0; i < kategorien.length; i++) {
+          if (kategorien[i].name.toLowerCase().indexOf(q) >= 0) frei.push(kategorien[i]);
+        }
+      }
+      el.content.appendChild(katSuchfeld(art));
+      return renderKategorienListe(art, frei, function (kat) {
+        katalogLaden(art, kat.id, kat.name, function (items) {
+          if (art === 'm') state.katWahl.movies = kat; else state.katWahl.series = kat;
+          render();
+        });
+      });
+    }
+
+    var items = katalogAusCache(art, wahl.id) || [];
+    var zurueck = button('◀ Alle Kategorien', function () {
+      if (art === 'm') state.katWahl.movies = null; else state.katWahl.series = null;
+      render();
+    });
+    zurueck.setAttribute('data-fkey', 'katzurueck:' + art);
+    el.content.appendChild(zurueck);
+
+    var liste = sortItems(items, 'title', (art === 'm' ? 'movies:' : 'series:') + wahl.id);
+    el.content.appendChild(element('div', 'section-title',
+      wahl.name + ' · ' + liste.length + (art === 'm' ? ' Filme' : ' Serien')));
+
+    if (!liste.length) {
+      el.content.appendChild(element('div', 'detail-meta',
+        'Diese Kategorie ist leer – oder alle Einträge fallen durch Sprachfilter, ' +
+        'ausgeblendete Kategorien oder die Kindersicherung.'));
+      return;
+    }
+
+    var grid = element('div', 'grid');
+    renderGridChunk(grid, liste, 0, 63, function (x) {
+      if (art === 'm') openMovie(x); else openSeries(x);
+    });
+    el.content.appendChild(grid);
+  }
+
+  /** Suchfeld über der Kategorienliste – 299 Kategorien sind sonst nicht erreichbar. */
+  function katSuchfeld(art) {
+    var wrap = element('div', 'search-wrap');
+    var input = document.createElement('input');
+    input.className = 'search focusable';
+    input.type = 'text';
+    input.placeholder = 'Kategorie suchen …';
+    input.value = state.katSuche[art] || '';
+    input.setAttribute('data-fkey', 'katsuche:' + art);
+    input.oninput = function () {
+      state.katSuche[art] = input.value;
+      // Nur die Liste neu bauen – ein voller Aufbau nähme dem Feld den Fokus.
+      var alt = el.content.querySelector('.katliste');
+      if (!alt) { render(); return; }
+      var neu = element('div', 'katliste');
+      var q = input.value.toLowerCase();
+      var kategorien = art === 'm' ? state.vodKategorien : state.serienKategorien;
+      var frei = [];
+      for (var i = 0; i < kategorien.length; i++) {
+        if (!kategorieErlaubt(kategorien[i].name)) continue;
+        if (!q || kategorien[i].name.toLowerCase().indexOf(q) >= 0) frei.push(kategorien[i]);
+      }
+      renderKategorieChunk(neu, art, frei, 0, 40, function (kat) {
+        katalogLaden(art, kat.id, kat.name, function () {
+          if (art === 'm') state.katWahl.movies = kat; else state.katWahl.series = kat;
+          render();
+        });
+      });
+      alt.parentNode.replaceChild(neu, alt);
+      collectFocusables();
+    };
+    wrap.appendChild(input);
+    return wrap;
   }
 
   // ---- Favoriten ----
@@ -1512,8 +1827,9 @@
     // Schleife mit Abbruch: `.filter()` lief über alle 142.000 Titel, obwohl
     // nur 20 gezeigt werden.
     var similar = [];
-    for (var si = 0; si < state.library.movies.length && similar.length < 20; si++) {
-      var cand = state.library.movies[si];
+    var kandidaten = state.lazyKatalog ? geladeneFilme() : state.library.movies;
+    for (var si = 0; si < kandidaten.length && similar.length < 20; si++) {
+      var cand = kandidaten[si];
       if (cand.group === m.group && cand.id !== m.id) similar.push(cand);
     }
     var s = shelf('Ähnliche Titel', similar, function (x) {
@@ -1657,11 +1973,25 @@
       return out;
     }
     var ch = search(state.library.channels, 'name', 30);
-    var mv = search(state.library.movies, 'title', 30);
-    var sr = search(state.library.series, 'title', 30);
+    var mv, sr;
+    if (state.lazyKatalog) {
+      // Filme liegen nicht mehr komplett im Speicher. Gesucht wird in dem, was
+      // geladen ist – und, wenn der Nutzer ihn zugeschaltet hat, im schlanken
+      // Titelindex über den ganzen Katalog.
+      mv = state.filmIndex ? indexSuche(q, 30) : search(geladeneFilme(), 'title', 30);
+      sr = search(geladeneSerien(), 'title', 30);
+    } else {
+      mv = search(state.library.movies, 'title', 30);
+      sr = search(state.library.series, 'title', 30);
+    }
+
+    if (state.lazyKatalog) el.content.appendChild(indexHinweis());
 
     if (!ch.length && !mv.length && !sr.length) {
-      return renderEmpty('Keine Treffer', 'Für „' + state.view.query + '" wurde nichts gefunden.');
+      el.content.appendChild(element('div', 'section-title', 'Keine Treffer'));
+      el.content.appendChild(element('div', 'detail-meta',
+        'Für „' + state.view.query + '" wurde nichts gefunden.'));
+      return;
     }
     if (ch.length) {
       el.content.appendChild(element('div', 'section-title', 'Sender'));
@@ -1677,6 +2007,108 @@
       return card(s.title, s.posterURL, function () { openSeries(s); });
     });
     if (s2) el.content.appendChild(s2);
+  }
+
+  /**
+   * Der Suchindex ist bewusst freiwillig: Er kostet rund 13 MB Speicher,
+   * dafür findet die Suche wieder jeden der 142.000 Filmtitel statt nur die
+   * der geöffneten Kategorien.
+   */
+  function indexHinweis() {
+    var box = element('div', 'panel');
+    if (state.indexLaedt) {
+      box.appendChild(element('div', 'detail-meta', 'Titelverzeichnis wird aufgebaut …'));
+      return box;
+    }
+    if (state.filmIndex) {
+      box.appendChild(element('div', 'detail-meta',
+        'Titelverzeichnis aktiv: ' + state.filmIndex.length + ' Filme durchsuchbar.'));
+      return box;
+    }
+    box.appendChild(element('div', 'detail-meta',
+      'Gesucht wird gerade nur in den geöffneten Kategorien. Das Titelverzeichnis ' +
+      'macht alle Filme durchsuchbar; es kostet einmalig etwa 15 Sekunden und ' +
+      'rund 13 MB Speicher.'));
+    box.appendChild(button('Alle Filme durchsuchbar machen', function () {
+      filmIndexAufbauen();
+    }, true));
+    return box;
+  }
+
+  /**
+   * Titelindex holen. Absichtlich OHNE JSON.parse: Der Objektgraph des vollen
+   * Katalogs belegte rund 50 MB, der Regex-Scan über den Antworttext liefert
+   * dasselbe für 13 MB (auf dem Gerät gemessen: 142.246 Titel, 5 s laden,
+   * 2 s auswerten).
+   */
+  function filmIndexAufbauen() {
+    var src = state.source;
+    if (!src || src.kind !== 'xtream' || state.indexLaedt) return;
+    state.indexLaedt = true;
+    render();
+
+    var url = Core.xtreamApi(src.host, src.user, src.pass, 'get_vod_streams');
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.timeout = 120000;
+    xhr.onload = function () {
+      var eintraege = null;
+      try {
+        eintraege = Core.scanVodIndex(xhr.responseText);
+      } catch (e) {
+        eintraege = null;
+      }
+      xhr.onload = null;
+      state.indexLaedt = false;
+      if (!eintraege || !eintraege.length) {
+        toast('Titelverzeichnis konnte nicht aufgebaut werden.', 7000);
+      } else {
+        state.filmIndex = eintraege;
+        toast(eintraege.length + ' Filmtitel durchsuchbar.');
+      }
+      render();
+    };
+    xhr.onerror = function () {
+      state.indexLaedt = false;
+      toast('Titelverzeichnis konnte nicht geladen werden.', 7000);
+      render();
+    };
+    xhr.ontimeout = xhr.onerror;
+    xhr.send();
+  }
+
+  /** Im Titelindex suchen; das Ergebnis sieht aus wie ein Filmeintrag. */
+  function indexSuche(q, limit) {
+    var out = [], idx = state.filmIndex;
+    if (!idx) return out;
+    var katName = {};
+    for (var c = 0; c < state.vodKategorien.length; c++) {
+      katName[state.vodKategorien[c].id] = state.vodKategorien[c].name;
+    }
+    // Sprachfilter, ausgeblendete und gesperrte Kategorien gelten auch hier –
+    // sonst wäre die Suche ein Weg an der Kindersicherung vorbei.
+    for (var i = 0; i < idx.length && out.length < limit; i++) {
+      var e = idx[i];
+      if (e.t.toLowerCase().indexOf(q) < 0) continue;
+      var gruppe = katName[e.c] || 'Allgemein';
+      if (!kategorieErlaubt(gruppe)) continue;
+      if (state.settings.languages.length) {
+        var probe = { title: e.t, group: gruppe, name: e.t };
+        var durch = Core.filterByLanguage({ channels: [], movies: [probe], series: [] },
+          state.settings.languages, state.settings.strict);
+        if (!durch.movies.length) continue;
+      }
+      out.push({
+        id: 'xtream|m|' + e.s,
+        title: e.t,
+        posterURL: e.p || '',
+        group: gruppe,
+        sid: e.s,
+        art: 'movie',
+        ext: e.e || 'mp4'
+      });
+    }
+    return out;
   }
 
   // ---- Programmführer ----
@@ -1858,8 +2290,12 @@
 
     panel.appendChild(element('div', 'section-title', 'Bibliothek'));
     panel.appendChild(element('p', null,
-      state.library.channels.length + ' Sender · ' + state.library.movies.length +
-      ' Filme · ' + state.library.series.length + ' Serien'));
+      state.lazyKatalog
+        ? (state.library.channels.length + ' Sender · ' + state.vodKategorien.length +
+           ' Filmkategorien · ' + state.serienKategorien.length + ' Serienkategorien' +
+           (state.filmIndex ? ' · ' + state.filmIndex.length + ' Titel im Verzeichnis' : ''))
+        : (state.library.channels.length + ' Sender · ' + state.library.movies.length +
+           ' Filme · ' + state.library.series.length + ' Serien')));
 
     var actions = element('div', 'actions');
     actions.appendChild(button('Statistik', function () {
@@ -2197,11 +2633,33 @@
    * Sprachfilter auf die Rohbibliothek anwenden. Die ungefilterte Fassung
    * bleibt erhalten, sonst ließe sich der Filter nie wieder lockern.
    */
+  /** Darf eine Kategorie nach Ausblenden/Kindersicherung überhaupt gezeigt werden? */
+  function kategorieErlaubt(name) {
+    var blockiert = state.settings.hiddenGroups;
+    for (var i = 0; i < blockiert.length; i++) if (blockiert[i] === name) return false;
+    if (state.settings.pin && !state.unlocked) {
+      for (var j = 0; j < state.settings.lockedGroups.length; j++) {
+        if (state.settings.lockedGroups[j] === name) return false;
+      }
+    }
+    return true;
+  }
+
   function applyLanguageFilter() {
     if (!state.rawLibrary) return;
     groupCache = {};        // Bibliothek ändert sich – Puffer verwerfen
     allGroupsCache = null;
     sortCache = {};
+    // Nachgeladene Kategorien wurden nach den ALTEN Regeln gefiltert. Bleiben
+    // sie liegen, zeigte eine frisch gesperrte Kategorie ihre Titel weiter.
+    state.katalogCache = {};
+    state.katalogReihe = [];
+    if (state.katWahl.movies && !kategorieErlaubt(state.katWahl.movies.name)) {
+      state.katWahl.movies = null;
+    }
+    if (state.katWahl.series && !kategorieErlaubt(state.katWahl.series.name)) {
+      state.katWahl.series = null;
+    }
     var lib = state.settings.languages.length
       ? Core.filterByLanguage(state.rawLibrary, state.settings.languages, state.settings.strict)
       : state.rawLibrary;
@@ -2241,6 +2699,20 @@
       }
     }
     add(state.rawLibrary.channels); add(state.rawLibrary.movies); add(state.rawLibrary.series);
+    /*
+     * Beim bedarfsweisen Laden stecken Film- und Serienkategorien nicht in den
+     * Einträgen (die sind ja noch nicht geholt), sondern in den Kategorienlisten.
+     * Ohne diesen Zusatz stünden in den Einstellungen nur noch die Live-
+     * Kategorien – die Kindersicherung könnte gerade die 18+-Kategorien der
+     * Filme nicht mehr sperren.
+     */
+    function addNamen(liste) {
+      for (var n = 0; n < liste.length; n++) {
+        var g = liste[n].name;
+        if (g && !seen[g]) { seen[g] = true; out.push(g); }
+      }
+    }
+    addNamen(state.vodKategorien); addNamen(state.serienKategorien);
     out.sort();
     allGroupsCache = out;
     return out;
@@ -2250,8 +2722,13 @@
     state.rawLibrary = lib;
     state.epgURL = lib.epgURL || null;
     applyLanguageFilter();
-    toast(state.library.channels.length + ' Sender · ' + state.library.movies.length +
-      ' Filme · ' + state.library.series.length + ' Serien');
+    if (state.lazyKatalog) {
+      toast(state.library.channels.length + ' Sender · ' + state.vodKategorien.length +
+        ' Filmkategorien · ' + state.serienKategorien.length + ' Serienkategorien');
+    } else {
+      toast(state.library.channels.length + ' Sender · ' + state.library.movies.length +
+        ' Filme · ' + state.library.series.length + ' Serien');
+    }
     render();
   }
 
@@ -2266,6 +2743,8 @@
       state.source = { kind: 'm3u', m3u: url };
       save('source', state.source);
       state.epg = {};
+      // Eine M3U-Datei enthält alles auf einmal – kein Nachladen nötig.
+      state.lazyKatalog = false;
       // Ohne den Fang bliebe bei einem Parser-Fehler der Spinner für immer
       // stehen – und die Oberfläche hätte kein bedienbares Element mehr.
       try {
@@ -2285,8 +2764,20 @@
 
     var categories = { live: {}, vod: {}, series: {} };
     var lib = { channels: [], movies: [], series: [] };
+    var vodKategorien = [], serienKategorien = [];
     var problems = [];
     var authError = null;
+
+    /** Rohantwort der Kategorien in eine schlanke Liste bringen. */
+    function kategorienListe(roh) {
+      var out = [];
+      if (!roh || !roh.length) return out;
+      for (var i = 0; i < roh.length; i++) {
+        var id = roh[i].category_id, name = roh[i].category_name;
+        if (id !== undefined && name) out.push({ id: String(id), name: String(name) });
+      }
+      return out;
+    }
 
     function fail(bereich, err) {
       // Jeden Teilbereich einzeln benennen: Früher wurden Fehler bei Filmen und
@@ -2301,6 +2792,11 @@
       if (authError) { render(); return toast('Anmeldung fehlgeschlagen: ' + authError.message, 8000); }
       state.source = { kind: 'xtream', host: host, user: user, pass: pass };
       save('source', state.source);
+      state.lazyKatalog = true;
+      state.vodKategorien = vodKategorien;
+      state.serienKategorien = serienKategorien;
+      state.katalogCache = {};
+      state.katalogReihe = [];
       try {
         afterLoad(lib);
       } catch (parseError) {
@@ -2342,28 +2838,32 @@
       }, 30000);
     }
 
+    /*
+     * Filme und Serien werden NICHT mehr vollständig geladen – nur ihre
+     * Kategorien (rund 24 KB gegenüber zweistelligen Megabyte). Die Einträge
+     * einer Kategorie kommen erst, wenn sie geöffnet wird; das hält den
+     * Speicher frei und die App startet in Sekunden statt in einer Minute.
+     */
     function step3vod() {
       httpGetJson(Core.xtreamApi(host, user, pass, 'get_vod_categories'), function (e1, cats) {
-        if (!e1 && cats) categories.vod = Core.parseCategories(cats);
-        httpGetJson(Core.xtreamApi(host, user, pass, 'get_vod_streams'), function (err, json) {
-          if (err) fail('Filme', err);
-          else try { lib.movies = Core.parseVodStreams(json, categories.vod, host, user, pass, 'xtream'); }
-          catch (pe) { fail('Filme', pe); }
-          state.loadingStep = 'Serien werden geladen …'; render();
-          step4series();
-        }, CATALOG_TIMEOUT);
+        if (e1) fail('Filmkategorien', e1);
+        else if (cats) {
+          categories.vod = Core.parseCategories(cats);
+          vodKategorien = kategorienListe(cats);
+        }
+        state.loadingStep = 'Serienkategorien werden geladen …'; render();
+        step4series();
       }, 30000);
     }
 
     function step4series() {
       httpGetJson(Core.xtreamApi(host, user, pass, 'get_series_categories'), function (e1, cats) {
-        if (!e1 && cats) categories.series = Core.parseCategories(cats);
-        httpGetJson(Core.xtreamApi(host, user, pass, 'get_series'), function (err, json) {
-          if (err) fail('Serien', err);
-          else try { lib.series = Core.parseSeriesList(json, categories.series, 'xtream'); }
-          catch (pe) { fail('Serien', pe); }
-          finish();
-        }, CATALOG_TIMEOUT);
+        if (e1) fail('Serienkategorien', e1);
+        else if (cats) {
+          categories.series = Core.parseCategories(cats);
+          serienKategorien = kategorienListe(cats);
+        }
+        finish();
       }, 30000);
     }
 
@@ -2645,6 +3145,14 @@
     if (code === 461 || code === 8) {
       if (state.view) { state.view = null; render(); e.preventDefault(); return; }
       if (state.gate) return;              // Profilwahl ist die oberste Ebene
+      // Eine geöffnete Kategorie ist eine eigene Ebene – erst zurück zur
+      // Kategorienliste, dann erst zur Startseite.
+      if (state.lazyKatalog && state.tab === 'movies' && state.katWahl.movies) {
+        state.katWahl.movies = null; render(); e.preventDefault(); return;
+      }
+      if (state.lazyKatalog && state.tab === 'series' && state.katWahl.series) {
+        state.katWahl.series = null; render(); e.preventDefault(); return;
+      }
       if (state.tab !== 'home') { state.tab = 'home'; render(); e.preventDefault(); return; }
       exitApp();
       e.preventDefault();

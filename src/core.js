@@ -298,6 +298,105 @@
     return out;
   }
 
+
+  /**
+   * Schlanker Titelindex aus der Rohantwort von `get_vod_streams`.
+   *
+   * Bewusst OHNE JSON.parse: Der volle Objektgraph des Katalogs belegte auf
+   * dem Fernseher rund 50 MB. Ein Scan über den Antworttext liefert Titel,
+   * Stream-Nummer, Kategorie, Poster und Dateiendung fuer rund 13 MB — genug,
+   * um jeden Film zu finden und danach abzuspielen (auf dem Geraet gemessen:
+   * 142.246 Titel, 5 s laden, 2 s auswerten).
+   *
+   * Der Scan arbeitet je Datensatz: `stream_id` markiert den Anfang eines
+   * Eintrags, die uebrigen Felder werden nur bis zum naechsten `stream_id`
+   * gesucht. So kann ein fehlendes Feld nicht den Wert des Nachbarn erben —
+   * ein Greedy-Muster ueber die ganze Antwort tut genau das.
+   */
+  function scanVodIndex(text) {
+    var out = [];
+    if (!text) return out;
+
+    /*
+     * Datensaetze werden an den echten Objektklammern getrennt, nicht an einem
+     * Feld: Der Name steht VOR `stream_id`, Kategorie und Endung dahinter — an
+     * `stream_id` geschnitten erbt jeder Eintrag Felder seines Nachbarn. Der
+     * Scanner ueberspringt Strings, damit eine Klammer in einem Filmtitel
+     * ("Wer {das} liest") die Grenzen nicht verschiebt.
+     */
+    var marke = /[{}"]/g;
+    var tiefe = 0, start = -1, m;
+    while ((m = marke.exec(text)) !== null) {
+      var z = m[0], i = m.index;
+      if (z === '"') {
+        var ende = stringEnde(text, i + 1);
+        if (ende < 0) break;
+        marke.lastIndex = ende + 1;
+        continue;
+      }
+      if (z === '{') {
+        tiefe++;
+        if (tiefe === 1) start = i;
+      } else {
+        tiefe--;
+        if (tiefe === 0 && start >= 0) {
+          eintragLesen(out, text.slice(start, i + 1));
+          start = -1;
+        }
+        if (tiefe < 0) tiefe = 0;
+      }
+    }
+    return out;
+  }
+
+  /** Position des schliessenden Anfuehrungszeichens ab `von` (Escapes beachtet). */
+  function stringEnde(text, von) {
+    var i = von;
+    while (i < text.length) {
+      var c = text.charCodeAt(i);
+      if (c === 92) { i += 2; continue; }   // Backslash: naechstes Zeichen ueberspringen
+      if (c === 34) return i;               // Anfuehrungszeichen
+      i++;
+    }
+    return -1;
+  }
+
+  /** Aus einem einzelnen Datensatz die Felder ziehen, die die Suche braucht. */
+  function eintragLesen(out, roh) {
+    var sid = feldText(roh, 'stream_id');
+    if (!sid) return;
+    out.push({
+      s: Number(sid),
+      t: feldText(roh, 'name') || ('Film ' + sid),
+      c: feldText(roh, 'category_id'),
+      p: feldText(roh, 'stream_icon'),
+      e: feldText(roh, 'container_extension')
+    });
+  }
+
+  /** Ein JSON-Stringfeld aus einem Textausschnitt holen (mit Escapes). */
+  function feldText(text, feld) {
+    var re = new RegExp('"' + feld + '":\\s*"((?:[^"\\\\]|\\\\.)*)"');
+    var m = re.exec(text);
+    if (!m) {
+      // Zahlenfelder wie category_id kommen je nach Panel ohne Anfuehrungszeichen.
+      var reZahl = new RegExp('"' + feld + '":\\s*(\\d+)');
+      var m2 = reZahl.exec(text);
+      return m2 ? m2[1] : '';
+    }
+    return jsonEntkleiden(m[1]);
+  }
+
+  /** JSON-Escapes in einem rohen Stringinhalt aufloesen. */
+  function jsonEntkleiden(roh) {
+    if (roh.indexOf('\\') < 0) return roh;
+    try {
+      return JSON.parse('"' + roh + '"');
+    } catch (e) {
+      return roh.replace(/\\\\(.)/g, '$1');
+    }
+  }
+
   function parseSeriesList(json, categories, sourceID) {
     var out = [];
     if (!json || !json.length) return out;
@@ -612,6 +711,7 @@
     parseCategories: parseCategories,
     parseLiveStreams: parseLiveStreams,
     parseVodStreams: parseVodStreams,
+    scanVodIndex: scanVodIndex,
     parseSeriesList: parseSeriesList,
     parseEpisodes: parseEpisodes,
     detectLanguage: detectLanguage,
