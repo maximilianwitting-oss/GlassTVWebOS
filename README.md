@@ -213,6 +213,18 @@ src/
 test/            Selbsttests (ohne Framework bzw. mit jsdom)
 ```
 
+## Lizenz
+
+MIT – siehe [LICENSE](LICENSE), gilt für den Code dieses Projekts.
+
+**Ausgenommen** ist `src/lib/webOSTV.js` (LG Electronics, Apache 2.0). Details
+in [THIRD-PARTY.md](THIRD-PARTY.md); der Lizenztext und der Urhebervermerk
+müssen bei einer Weitergabe erhalten bleiben.
+
+GlassTV enthält und vermittelt **keine Inhalte**. Die App spielt ausschließlich
+Playlisten ab, die der Nutzer selbst einträgt; die Zugangsdaten bleiben auf dem
+Gerät.
+
 ## Verhältnis zu den anderen Projekten
 
 Eigenständiges Projekt neben `GlassTV` (iOS/tvOS/macOS), `GlassTVAndroid`
