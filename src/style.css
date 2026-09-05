@@ -501,3 +501,22 @@ button.ghost {
   border-radius: 4px; overflow: hidden;
 }
 .bar-fill { height: 100%; background: #8c80f7; background: var(--accent); }
+
+
+/* ------------------------------------------------------- Magic Remote ---- */
+
+/*
+ * Mit sichtbarem Zeiger zeigt der Mauszeiger selbst, wo man ist – der große
+ * Fokusring wäre dann doppelt gemoppelt und lenkt ab. Er wird deshalb ruhiger,
+ * bleibt aber vorhanden: Ein Klick soll sichtbar dorthin gehen, wo der Ring
+ * liegt. Ohne Zeiger (reine Tastenbedienung) gilt weiter der volle Ring.
+ */
+body.zeiger .focusable:focus {
+  box-shadow: 0 0 0 2px #0b0a17, 0 0 0 6px #8c80f7, 0 6px 20px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 6px var(--accent), 0 6px 20px rgba(0, 0, 0, 0.45);
+  -webkit-transform: scale(1.02); transform: scale(1.02);
+}
+
+/* Alles Anklickbare trägt den Zeiger-Cursor, damit der Magic Remote seine
+   Form ändert und Bedienbares von Text unterscheidbar bleibt. */
+.focusable, .card, .channel, .chip, .tab, button { cursor: pointer; }

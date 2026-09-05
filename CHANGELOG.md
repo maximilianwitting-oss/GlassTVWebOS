@@ -1,5 +1,16 @@
 # Änderungen
 
+## 1.14.0
+- **Magic-Remote-Zeiger unterstützt**: Der Fokus folgt dem Zeiger; bei
+  sichtbarem Zeiger wird der Fokusring ruhiger. Zertifizierungskriterium bei LG.
+- **Speicherbedarf gesenkt**: JS-Heap 117 → 82 MB, dekodierte Bilder
+  242 → 61 MB. Xtream-Einträge tragen nur noch die Stream-Nummer, Bilder werden
+  kleiner angefordert und außerhalb des Sichtfelds freigegeben, Raster werden
+  in Blöcken à 63 Kacheln gezeichnet.
+- Nebeneffekt: Zugangsdaten stehen nicht mehr in Kennungen und im Verlauf.
+  **Achtung:** Dadurch ändern sich die Kennungen – bereits gemerkte Favoriten
+  und der bisherige Verlauf werden einmalig nicht mehr zugeordnet.
+
 ## 1.11.0
 - **webOSTV.js eingebunden** (LGs offizielle Bibliothek 1.2.13 aus dem SDK,
   Apache 2.0). Damit läuft das Beenden über `webOS.platformBack()` statt über

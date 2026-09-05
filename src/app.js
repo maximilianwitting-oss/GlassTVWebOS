@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.11.0';
+  var APP_VERSION = '1.14.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -278,6 +278,69 @@
     if (col && dy !== 0) col.scrollTop += dy * 160;
   }
 
+
+  // ------------------------------------------------------------ Bilder ----
+
+  /*
+   * Bilder sind der mit Abstand größte Speicherposten: Auf dem Gerät gemessen
+   * belegten 120 sichtbare Poster rund 240 MB, weil ein dekodiertes Bild
+   * Breite × Höhe × 4 Byte kostet – ein Poster in Originalgröße also zweistellige
+   * Megabyte. Zwei Hebel:
+   *   1. kleinere Fassung anfordern, wo der Anbieter das unterstützt,
+   *   2. nur laden, was in der Nähe des Sichtfelds liegt, und den Rest wieder
+   *      freigeben.
+   */
+
+  /** Bekannte Bilddienste auf eine bildschirmgerechte Größe bringen. */
+  function bildAdresse(url, breit) {
+    if (!url) return url;
+    // TMDB liefert feste Größenstufen; „original" ist für eine 232-px-Kachel
+    // etwa das Zwanzigfache dessen, was gebraucht wird.
+    if (url.indexOf('image.tmdb.org/t/p/') >= 0) {
+      return url.replace(/\/t\/p\/(original|w\d{3,4})\//, breit ? '/t/p/w780/' : '/t/p/w342/');
+    }
+    return url;
+  }
+
+  var lazyBilder = [];
+  var lazyTimer = null;
+
+  function lazyBildAnmelden(img) { lazyBilder.push(img); }
+
+  /**
+   * Bilder in der Nähe des Sichtfelds laden, weit entfernte entladen.
+   *
+   * `IntersectionObserver` gibt es auf dem Fernseher nicht (ab Chrome 51 nur
+   * teilweise, hier nicht verfügbar), deshalb ein entprellter Durchlauf über
+   * die angemeldeten Bilder – bei einigen hundert kostet das nichts.
+   */
+  function lazyPruefen() {
+    var hoehe = window.innerHeight || 1080;
+    var breite = window.innerWidth || 1920;
+    var noch = [];
+    for (var i = 0; i < lazyBilder.length; i++) {
+      var img = lazyBilder[i];
+      if (!img.parentNode) continue;            // Element ist weg
+      noch.push(img);
+      var r = img.getBoundingClientRect();
+      var nah = r.bottom > -hoehe && r.top < hoehe * 2 &&
+                r.right > -breite && r.left < breite * 2;
+      var quelle = img.getAttribute('data-src');
+      if (nah && quelle && img.getAttribute('src') !== quelle) {
+        img.setAttribute('src', quelle);
+      } else if (!nah && img.getAttribute('src')) {
+        // Entladen gibt den dekodierten Speicher wieder frei.
+        img.removeAttribute('src');
+      }
+    }
+    lazyBilder = noch;
+  }
+
+  function lazyAnstossen() {
+    if (lazyTimer) return;
+    lazyTimer = setTimeout(function () { lazyTimer = null; lazyPruefen(); }, 120);
+  }
+
   // ---------------------------------------------------------- Bausteine ----
 
   function toast(message, ms) {
@@ -345,9 +408,12 @@
     var box = element('div', 'poster');
     if (url) {
       var img = document.createElement('img');
-      img.src = url;
+      // Erst `data-src`: Geladen wird, sobald die Kachel in die Nähe des
+      // Sichtfelds kommt.
+      img.setAttribute('data-src', bildAdresse(url, wide));
       img.onerror = function () { img.style.display = 'none'; };
       box.appendChild(img);
+      lazyBildAnmelden(img);
     }
     return box;
   }
@@ -424,6 +490,31 @@
     }
     if (cacheKey) groupCache[cacheKey] = { len: items.length, list: out };
     return out;
+  }
+
+  /**
+   * Abspieladresse eines Eintrags.
+   *
+   * M3U-Einträge tragen sie selbst (sie ist dort die einzige Quelle).
+   * Xtream-Einträge speichern nur die Stream-Nummer – die Adresse wird hier
+   * gebaut. Das spart bei sechsstelligen Bibliotheken erheblich Speicher und
+   * hält die Zugangsdaten aus Kennungen, Favoriten und Verlauf heraus.
+   */
+  /** Eintrag anhand seiner Kennung in der Bibliothek finden. */
+  function findById(id) {
+    var lists = [state.library.channels, state.library.movies, state.library.series];
+    for (var l = 0; l < lists.length; l++) {
+      for (var i = 0; i < lists[l].length; i++) if (lists[l][i].id === id) return lists[l][i];
+    }
+    return null;
+  }
+
+  function streamUrlOf(item) {
+    if (!item) return '';
+    if (item.streamURL) return item.streamURL;
+    var src = state.source;
+    if (!src || src.kind !== 'xtream' || item.sid === undefined) return '';
+    return Core.xtreamStreamUrl(item.art || 'movie', src.host, src.user, src.pass, item.sid, item.ext);
   }
 
   function programsFor(ch) {
@@ -954,6 +1045,7 @@
     else if (state.tab === 'series') renderSeriesList();
     else renderFavorites();
 
+    lazyAnstossen();
     setTimeout(function () { if (!restoreFocus()) ensureFocus(); }, 0);
     // Zweiter Anlauf: Beim ersten Aufbau sind Bilder/Layout noch nicht fertig,
     // ein Fokus auf ein Element der Größe null greift nicht.
@@ -993,7 +1085,11 @@
       var s1 = shelf('Weiterschauen', cont, function (p) {
         var rest = Math.max(1, Math.round((p.duration - p.position) / 60));
         var c = card(p.title, p.image, function () {
-          playItem(p.title, p.url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position, null,
+          // Die Adresse steht bewusst nicht mehr im Verlauf (Zugangsdaten) –
+          // hier aus der Bibliothek nachschlagen.
+          var url = p.url || streamUrlOf(findById(p.id));
+          if (!url) return toast('Dieser Titel ist in der aktuellen Quelle nicht mehr enthalten.', 6000);
+          playItem(p.title, url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position, null,
             { image: p.image, group: p.group });
         }, true);
         c.appendChild(progressBar(p.position / p.duration));
@@ -1089,6 +1185,32 @@
     el.content.appendChild(box);
   }
 
+  /**
+   * Kachelblock zeichnen und einen Knopf für den nächsten anbieten.
+   *
+   * 63 = neun volle Reihen à sieben Kacheln – so bleibt das Raster bündig.
+   */
+  function renderGridChunk(grid, list, from, count, onSelect) {
+    for (var i = from; i < list.length && i < from + count; i++) {
+      (function (item) {
+        grid.appendChild(card(item.title, item.posterURL, function () { onSelect(item); }));
+      })(list[i]);
+    }
+    if (from + count < list.length) {
+      var rest = list.length - from - count;
+      var mehr = button('Weitere ' + Math.min(count, rest) + ' anzeigen', function () {
+        grid.removeChild(mehr);
+        var ersteNeue = grid.childNodes.length;
+        renderGridChunk(grid, list, from + count, count, onSelect);
+        collectFocusables();
+        lazyAnstossen();
+        var node = grid.childNodes[ersteNeue];
+        if (node && node.focus) { node.focus(); revealFocus(node); }
+      }, true);
+      grid.appendChild(mehr);
+    }
+  }
+
   function renderChannelChunk(box, list, from, count) {
     for (var i = from; i < list.length && i < from + count; i++) {
       box.appendChild(channelRow(list[i], i + 1));
@@ -1176,8 +1298,9 @@
     if (ch.logoURL) {
       var logo = document.createElement('img');
       logo.className = 'logo';
-      logo.src = ch.logoURL;
+      logo.setAttribute('data-src', bildAdresse(ch.logoURL));
       logo.onerror = function () { logo.style.visibility = 'hidden'; };
+      lazyBildAnmelden(logo);
       row.appendChild(logo);
     } else {
       row.appendChild(element('div', 'logo'));
@@ -1223,11 +1346,9 @@
     el.content.appendChild(element('div', 'section-title', list.length + ' Filme'));
 
     var grid = element('div', 'grid');
-    for (var i = 0; i < list.length && i < 150; i++) {
-      (function (m) {
-        grid.appendChild(card(m.title, m.posterURL, function () { openMovie(m); }));
-      })(list[i]);
-    }
+    // In Blöcken statt alles auf einmal: Jede sichtbare Kachel kostet ein
+    // dekodiertes Bild, und davon hängt der Speicherbedarf der App ab.
+    renderGridChunk(grid, list, 0, 63, function (m) { openMovie(m); });
     el.content.appendChild(grid);
   }
 
@@ -1247,11 +1368,7 @@
     el.content.appendChild(element('div', 'section-title', list.length + ' Serien'));
 
     var grid = element('div', 'grid');
-    for (var i = 0; i < list.length && i < 150; i++) {
-      (function (s) {
-        grid.appendChild(card(s.title, s.posterURL, function () { openSeries(s); }));
-      })(list[i]);
-    }
+    renderGridChunk(grid, list, 0, 63, function (x) { openSeries(x); });
     el.content.appendChild(grid);
   }
 
@@ -1308,7 +1425,7 @@
     var bd = element('div', 'detail-backdrop');
     if (backdrop) {
       var img = document.createElement('img');
-      img.src = backdrop;
+      img.src = bildAdresse(backdrop, true);   // Backdrop darf größer sein
       img.onerror = function () { img.style.display = 'none'; };
       bd.appendChild(img);
     }
@@ -1366,16 +1483,16 @@
       (resume.position / resume.duration) < 0.95;
     if (canResume) {
       actions.appendChild(button('▶ Weiter ab ' + durationText(resume.position), function () {
-        playItem(m.title, m.streamURL, m.group, 'movie', m.id, resume.position, null,
+        playItem(m.title, streamUrlOf(m), m.group, 'movie', m.id, resume.position, null,
           { image: m.posterURL, group: m.group });
       }));
       actions.appendChild(button('Von vorn', function () {
-        playItem(m.title, m.streamURL, m.group, 'movie', m.id, 0, null,
+        playItem(m.title, streamUrlOf(m), m.group, 'movie', m.id, 0, null,
           { image: m.posterURL, group: m.group });
       }, true));
     } else {
       actions.appendChild(button('▶ Abspielen', function () {
-        playItem(m.title, m.streamURL, m.group, 'movie', m.id, 0, null,
+        playItem(m.title, streamUrlOf(m), m.group, 'movie', m.id, 0, null,
           { image: m.posterURL, group: m.group });
       }));
     }
@@ -1484,8 +1601,10 @@
         var thumb = element('div', 'logo');
         if (ep.imageURL) {
           var img = document.createElement('img');
-          img.className = 'logo'; img.src = ep.imageURL;
+          img.className = 'logo';
+          img.setAttribute('data-src', bildAdresse(ep.imageURL));
           img.onerror = function () { img.style.visibility = 'hidden'; };
+          lazyBildAnmelden(img);
           thumb = img;
         }
         row.appendChild(thumb);
@@ -1497,7 +1616,7 @@
         if (p && p.duration > 0) info.appendChild(progressBar(p.position / p.duration));
         row.appendChild(info);
         row.onclick = function () {
-          playItem(s.title + ' · ' + label, ep.streamURL, ep.title, 'episode', ep.id,
+          playItem(s.title + ' · ' + label, streamUrlOf(ep), ep.title, 'episode', ep.id,
             p ? p.position : 0, { series: s, episode: ep },
             { image: ep.imageURL || s.posterURL, group: s.group });
         };
@@ -1583,8 +1702,10 @@
         row.tabIndex = 0;
         if (ch.logoURL) {
           var img = document.createElement('img');
-          img.className = 'logo'; img.src = ch.logoURL;
+          img.className = 'logo';
+          img.setAttribute('data-src', bildAdresse(ch.logoURL));
           img.onerror = function () { img.style.visibility = 'hidden'; };
+          lazyBildAnmelden(img);
           row.appendChild(img);
         } else row.appendChild(element('div', 'logo'));
         var info = element('div', 'info');
@@ -2295,7 +2416,7 @@
 
   function playChannel(ch) {
     var now = Core.nowProgram(programsFor(ch));
-    playItem(ch.name, ch.streamURL, now ? now.title : ch.group, 'live', ch.id, 0,
+    playItem(ch.name, streamUrlOf(ch), now ? now.title : ch.group, 'live', ch.id, 0,
       { channel: ch }, { image: ch.logoURL, group: ch.group });
   }
 
@@ -2388,10 +2509,10 @@
     var prev = state.progress[player.id] || {};
     state.progress[player.id] = {
       id: player.id, kind: player.kind, title: player.title,
-      // Bewusst die ursprünglich angeforderte Adresse, nicht `currentSrc`:
-      // Letztere trägt bei Xtream Benutzer und Passwort im Pfad, und der
-      // Verlauf liegt unverschlüsselt im Gerätespeicher.
-      url: player.sourceUrl || '',
+      // Keine Adresse im Verlauf: Sie trägt bei Xtream Benutzer und Passwort,
+      // und der Verlauf liegt unverschlüsselt im Gerätespeicher. Beim
+      // Fortsetzen wird sie aus der Bibliothek neu gebaut.
+      url: '',
       // Poster und Kategorie kommen vom Aufrufer: ohne sie hätte
       // „Weiterschauen" kein Bild und die Empfehlungen keine Grundlage.
       image: (player.meta && player.meta.image) || prev.image || null,
@@ -2470,7 +2591,7 @@
       if (eps[i].id === cur.id) {
         var nx = eps[i + 1];
         playItem(s.title + ' · S' + two(nx.season) + 'E' + two(nx.episode),
-          nx.streamURL, nx.title, 'episode', nx.id, 0, { series: s, episode: nx },
+          streamUrlOf(nx), nx.title, 'episode', nx.id, 0, { series: s, episode: nx },
           { image: nx.imageURL || s.posterURL, group: s.group });
         return true;
       }
@@ -2567,6 +2688,57 @@
     if (typeof webOS !== 'undefined' && webOS.platformBack) { webOS.platformBack(); return; }
     // Nur falls die Bibliothek fehlt (Browser-Test): grob, aber wirksam.
     try { window.close(); } catch (e) { /* dann bleibt die Home-Taste */ }
+  }
+
+
+  // ------------------------------------------------- Magic Remote ----
+
+  /*
+   * LG-Fernbedienungen haben einen Zeiger. Ohne Behandlung fühlt sich die App
+   * damit tot an: Man fährt über eine Kachel, nichts passiert, und beim Klick
+   * springt der Fokus woanders hin. LG prüft das bei der Zertifizierung.
+   *
+   * Grundsatz: Der Zeiger führt den Fokus. Was unter ihm liegt, ist fokussiert –
+   * damit gibt es weiterhin genau EINE Ortsangabe, egal ob mit Tasten oder
+   * Zeiger bedient wird.
+   */
+  var zeigerAktiv = false;
+
+  function naechstesFokusziel(node) {
+    // `closest` gibt es ab Chrome 41 – auf 53 also vorhanden.
+    if (node && node.closest) return node.closest('.focusable');
+    while (node && node !== document.body) {
+      if (node.className && (' ' + node.className + ' ').indexOf(' focusable ') >= 0) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function initZeiger() {
+    document.addEventListener('mouseover', function (e) {
+      var ziel = naechstesFokusziel(e.target);
+      if (ziel && ziel !== document.activeElement) {
+        zeigerAktiv = true;
+        ziel.focus();
+        // Kein revealFocus: Der Zeiger steht schon dort, ein Scrollen würde
+        // den Inhalt unter ihm wegziehen.
+      }
+    });
+
+    /*
+     * webOS meldet, ob der Zeiger gerade sichtbar ist. Wird er ausgeblendet
+     * (Nutzer legt die Fernbedienung hin und drückt eine Taste), bleibt der
+     * zuletzt berührte Eintrag fokussiert – so führt die Tastenbedienung dort
+     * weiter, wo der Zeiger aufgehört hat.
+     */
+    document.addEventListener('cursorStateChange', function (e) {
+      zeigerAktiv = !!(e.detail && e.detail.visibility);
+      document.body.className = zeigerAktiv ? 'zeiger' : '';
+      if (!zeigerAktiv) {
+        var a = document.activeElement;
+        if (!a || a === document.body) ensureFocus();
+      }
+    });
   }
 
   // ------------------------------------------------------------ Start ----
@@ -2676,6 +2848,13 @@
       state.tab = 'home';
       render();
     });
+
+    initZeiger();
+
+    // Beim Scrollen nachladen bzw. freigeben – auch waagerechte Regale melden
+    // sich hier (Scroll-Ereignisse steigen im Dokument auf, wenn man sie
+    // einfängt statt sie an einem Element zu erwarten).
+    document.addEventListener('scroll', lazyAnstossen, true);
 
     document.addEventListener('keydown', onKey);
 

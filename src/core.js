@@ -235,6 +235,21 @@
     return map;
   }
 
+  /**
+   * Adresse eines Xtream-Streams aus seiner Nummer bauen.
+   *
+   * Die Adresse wird bewusst NICHT je Eintrag gespeichert: Sie enthält
+   * Benutzer und Passwort und ist rund 70 Zeichen lang – bei sechsstelligen
+   * Bibliotheken zweimal je Eintrag (Adresse + Kennung) sind das zig Megabyte
+   * und die Zugangsdaten stünden in jedem gemerkten Favoriten.
+   */
+  function xtreamStreamUrl(art, host, user, pass, sid, ext) {
+    var ordner = art === 'live' ? 'live' : (art === 'series' ? 'series' : 'movie');
+    var endung = art === 'live' ? 'm3u8' : (ext || 'mp4');
+    return host + '/' + ordner + '/' + encodeURIComponent(user) + '/' +
+      encodeURIComponent(pass) + '/' + sid + '.' + endung;
+  }
+
   function parseLiveStreams(json, categories, host, user, pass, sourceID) {
     var out = [];
     if (!json || !json.length) return out;
@@ -242,13 +257,14 @@
       var s = json[i];
       var id = num(s.stream_id);
       if (id === null) continue;
-      var url = host + '/live/' + encodeURIComponent(user) + '/' + encodeURIComponent(pass) + '/' + id + '.m3u8';
       out.push({
-        id: sourceID + '|' + url,
+        // Kennung aus der Stream-Nummer: kurz, stabil und ohne Zugangsdaten.
+        id: sourceID + '|l|' + id,
         name: str(s.name) || ('Sender ' + id),
         logoURL: str(s.stream_icon),
         group: categories[str(s.category_id)] || 'Allgemein',
-        streamURL: url,
+        sid: id,
+        art: 'live',
         epgID: str(s.epg_channel_id),
         xtreamStreamID: id,
         archiveDays: num(s.tv_archive_duration),
@@ -265,14 +281,14 @@
       var s = json[i];
       var id = num(s.stream_id);
       if (id === null) continue;
-      var ext = str(s.container_extension) || 'mp4';
-      var url = host + '/movie/' + encodeURIComponent(user) + '/' + encodeURIComponent(pass) + '/' + id + '.' + ext;
       out.push({
-        id: sourceID + '|' + url,
+        id: sourceID + '|m|' + id,
         title: str(s.name) || ('Film ' + id),
         posterURL: str(s.stream_icon),
         group: categories[str(s.category_id)] || 'Allgemein',
-        streamURL: url,
+        sid: id,
+        art: 'movie',
+        ext: str(s.container_extension) || null,
         rating: num(s.rating),
         year: null,
         xtreamStreamID: id,
@@ -325,8 +341,6 @@
       if (typeof node !== 'object') return;
       var id = num(node.id);
       if (id !== null) {
-        var ext = str(node.container_extension) || 'mp4';
-        var url = host + '/series/' + encodeURIComponent(user) + '/' + encodeURIComponent(pass) + '/' + id + '.' + ext;
         var infoNode = node.info || {};
         var staffel = num(node.season) !== null ? num(node.season) : (seasonHint || 1);
         var nummer = num(node.episode_num);
@@ -337,11 +351,13 @@
           nummer = perSeason[staffel];
         }
         out.push({
-          id: seriesID + '|' + url,
+          id: seriesID + '|e|' + id,
           title: str(node.title) || str(infoNode.name) || ('Folge ' + id),
           season: staffel,
           episode: nummer,
-          streamURL: url,
+          sid: id,
+          art: 'series',
+          ext: str(node.container_extension) || null,
           imageURL: str(infoNode.movie_image),
           durationSeconds: num(infoNode.duration_secs),
         });
@@ -592,6 +608,7 @@
     displayNameIndex: displayNameIndex,
     sanitizedHost: sanitizedHost,
     xtreamApi: xtreamApi,
+    xtreamStreamUrl: xtreamStreamUrl,
     parseCategories: parseCategories,
     parseLiveStreams: parseLiveStreams,
     parseVodStreams: parseVodStreams,

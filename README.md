@@ -43,6 +43,9 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   iOS-App – ohne den Abfall bestimmt für immer, was man einmal gesehen hat.
 - **Zurück-Taste** in drei Stufen: Unteransicht → Liste, anderer Tab →
   Startseite, Startseite → App beenden (über `webOS.platformBack()`).
+- **Magic Remote**: Der Zeiger führt den Fokus – was unter ihm liegt, ist
+  fokussiert, damit es weiterhin genau eine Ortsangabe gibt. Bei sichtbarem
+  Zeiger wird der Fokusring ruhiger (der Zeiger zeigt die Position ja selbst).
 - **Bedienung**: vollständig mit der Fernbedienung. Der Fokus wandert
   *geometrisch* (nicht in DOM-Reihenfolge), damit Raster und Reihen sich
   räumlich anfühlen. Farbtasten: grün = Guide, gelb = Suche, blau = Favorit.
@@ -67,8 +70,26 @@ technisch nicht möglich (siehe unten).
 - **Video ist nicht im Screenshot.** Die Wiedergabe läuft auf einer Hardware-
   Ebene, die der Browser nicht mitzeichnet: Ein Screenshot des laufenden Films
   ist schwarz, obwohl auf dem Schirm das Bild steht.
-- **Große Listen** werden bewusst gedeckelt (120 Senderzeilen, 150 Kacheln,
-  Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst ein.
+- **Große Listen** werden bewusst in Blöcken gezeichnet (120 Senderzeilen,
+  63 Kacheln, Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst
+  ein, und jede sichtbare Kachel kostet ein dekodiertes Bild.
+- **Speicher.** Auf dem Gerät gemessen mit einer Playlist aus 42.000 Sendern,
+  142.000 Filmen und 31.000 Serien:
+
+  | Posten | vorher | jetzt |
+  |---|---|---|
+  | JS-Heap | 117 MB | 82 MB |
+  | dekodierte Bilder | 242 MB | 61 MB |
+  | Kacheln je Ansicht | 150 | 63 |
+
+  Erreicht durch: Xtream-Einträge speichern nur noch die Stream-Nummer statt
+  der vollen Adresse (die steckte zweimal je Eintrag – als Adresse und in der
+  Kennung), Bilder werden in bildschirmgerechter Größe angefordert und nur in
+  der Nähe des Sichtfelds geladen bzw. wieder freigegeben. Der JS-Heap bleibt
+  nach einem Rundgang durch alle Tabs stabil – kein Leck. Der Prozess-Gesamt-
+  wert liegt dennoch bei rund 400 MB; der Rest ist Browser-Cache und Renderer,
+  auf die eine Web-App keinen direkten Zugriff hat. Bei kleineren Playlisten
+  liegt der Wert entsprechend niedriger.
 - **Kein Mini-Player.** Das Video liegt auf einer Hardware-Ebene, die sich
   nicht verkleinern lässt: Schrumpft man das `<video>` per CSS, läuft der Ton
   weiter und das Bild bleibt schwarz. Die naheliegende Abhilfe – die Videoebene
