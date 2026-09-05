@@ -1107,23 +1107,56 @@
     }
   }
 
+  /**
+   * Kategorie-Leiste über den Listen.
+   *
+   * Die ersten 40 stehen direkt da – bei mehr führt „Suchen …" zu einem Feld,
+   * über das auch alphabetisch hintere Kategorien erreichbar sind. Vorher waren
+   * die schlicht nicht auswählbar.
+   */
   function groupChips(groups, selected, onPick) {
+    var box = document.createElement('div');
     var wrap = element('div', 'chips');
     var all = element('span', 'chip focusable' + (selected ? '' : ' active'), 'Alle');
     all.tabIndex = 0;
     all.setAttribute('data-fkey', 'group:*');
     all.onclick = function () { onPick(null); };
     wrap.appendChild(all);
-    for (var i = 0; i < groups.length && i < 40; i++) {
+
+    // Die gewählte Kategorie immer zeigen, auch wenn sie hinter Position 40 liegt.
+    var sichtbar = [];
+    for (var i = 0; i < groups.length && sichtbar.length < 40; i++) sichtbar.push(groups[i]);
+    if (selected && sichtbar.indexOf(selected) < 0) sichtbar.unshift(selected);
+
+    for (var j = 0; j < sichtbar.length; j++) {
       (function (g) {
         var c = element('span', 'chip focusable' + (selected === g ? ' active' : ''), g);
         c.tabIndex = 0;
         c.setAttribute('data-fkey', 'group:' + g);
         c.onclick = function () { onPick(g); };
         wrap.appendChild(c);
-      })(groups[i]);
+      })(sichtbar[j]);
     }
-    return wrap;
+
+    if (groups.length > sichtbar.length) {
+      var mehr = element('span', 'chip focusable', 'Suchen … (' + groups.length + ')');
+      mehr.tabIndex = 0;
+      mehr.setAttribute('data-fkey', 'group:suchen');
+      mehr.onclick = function () {
+        if (box.childNodes.length > 1) { box.removeChild(box.lastChild); return; }
+        box.appendChild(categoryPicker(
+          groups,
+          function (name) { return selected === name; },
+          function (name) { onPick(name); },
+          'gsearch', '●'));
+        var feld = box.querySelector('input');
+        if (feld) { feld.focus(); revealFocus(feld); }
+      };
+      wrap.appendChild(mehr);
+    }
+
+    box.appendChild(wrap);
+    return box;
   }
 
   function channelRow(ch, number) {
@@ -1598,6 +1631,76 @@
     return v.slice(0, 2) + '***';
   }
 
+
+  /**
+   * Kategorie-Wähler mit Suchfeld.
+   *
+   * Bei Playlisten dieser Größe hat ein Anbieter hunderte bis tausende
+   * Kategorien. Eine harte Deckelung auf die ersten 80 hieß: Alles alphabetisch
+   * dahinter war unerreichbar – ausgerechnet die 18+-Kategorien, die typisch
+   * „XXX …" heißen, ließen sich damit nie sperren.
+   *
+   * Das Suchfeld baut NUR die Chipliste neu auf, nicht die ganze Seite: Ein
+   * `render()` je Tastendruck würde den Fokus aus dem Feld reißen und die
+   * Bildschirmtastatur schließen.
+   */
+  function categoryPicker(gruppen, istGewaehlt, onToggle, praefix, marke) {
+    var wrap = document.createElement('div');
+    var feld = element('input', 'focusable');
+    feld.type = 'text';
+    feld.placeholder = 'Kategorie suchen';
+    // Eigener Namensraum: sonst zählt das Feld bei den Chips mit.
+    feld.setAttribute('data-fkey', 'suchfeld-' + praefix);
+    wrap.appendChild(feld);
+
+    var liste = element('div', 'chips');
+    var hinweis = element('div', 'detail-meta', '');
+    var MAX = 60;
+
+    function fuellen() {
+      clear(liste);
+      var q = feld.value.replace(/^\s+|\s+$/g, '').toLowerCase();
+      var treffer = 0, gezeigt = 0;
+      for (var i = 0; i < gruppen.length; i++) {
+        var name = gruppen[i];
+        if (q && name.toLowerCase().indexOf(q) < 0) continue;
+        treffer++;
+        if (gezeigt >= MAX) continue;
+        gezeigt++;
+        (function (n) {
+          var an = istGewaehlt(n);
+          var c = element('span', 'chip focusable' + (an ? ' active' : ''), (an ? marke + ' ' : '') + n);
+          c.tabIndex = 0;
+          c.setAttribute('data-fkey', praefix + ':' + n);
+          c.onclick = function () {
+            onToggle(n);
+            fuellen();          // nur die Liste, damit der Fokus im Feld bleibt
+          };
+          liste.appendChild(c);
+        })(name);
+      }
+      if (!treffer) {
+        hinweis.textContent = q
+          ? 'Keine Kategorie enthält „' + feld.value + '".'
+          : 'Keine Kategorien geladen.';
+      } else if (treffer > gezeigt) {
+        hinweis.textContent = gezeigt + ' von ' + treffer +
+          ' Treffern gezeigt – Suche eingrenzen, um die übrigen zu erreichen.';
+      } else {
+        hinweis.textContent = treffer + ' von ' + gruppen.length + ' Kategorien.';
+      }
+    }
+
+    feld.oninput = fuellen;
+    // `oninput` fehlt auf manchen TV-Tastaturen – Tastendruck als Netz.
+    feld.onkeyup = fuellen;
+    fuellen();
+
+    wrap.appendChild(liste);
+    wrap.appendChild(hinweis);
+    return wrap;
+  }
+
   function renderSettings() {
     el.content.appendChild(backButton());
     var panel = element('div', 'panel');
@@ -1806,8 +1909,9 @@
 
     // ---- Kategorien ausblenden ----
     var groups = allGroups();
-    el.content.appendChild(element('div', 'section-title',
-      'Kategorien ausblenden (' + state.settings.hiddenGroups.length + ' von ' + groups.length + ')'));
+    var kopf = element('div', 'section-title',
+      'Kategorien ausblenden (' + state.settings.hiddenGroups.length + ' von ' + groups.length + ')');
+    el.content.appendChild(kopf);
     el.content.appendChild(element('div', 'detail-meta',
       'Ohne PIN – reines Aufräumen. Bei großen Playlisten die wirksamste Bremse.'));
     var groupActions = element('div', 'actions');
@@ -1823,29 +1927,22 @@
     el.content.appendChild(groupActions);
 
     if (state.view.showGroups) {
-      var groupChipBox = element('div', 'chips');
-      // Bei tausenden Kategorien nur die ersten 80 – alles andere bremst den TV.
-      for (var g = 0; g < groups.length && g < 80; g++) {
-        (function (name) {
-          var hidden = state.settings.hiddenGroups.indexOf(name) >= 0;
-          var c = element('span', 'chip focusable' + (hidden ? ' active' : ''),
-            (hidden ? '✕ ' : '') + name);
-          c.tabIndex = 0;
-          c.setAttribute('data-fkey', 'hide:' + name);
-          c.onclick = function () {
-            var idx = state.settings.hiddenGroups.indexOf(name);
-            if (idx >= 0) state.settings.hiddenGroups.splice(idx, 1);
-            else state.settings.hiddenGroups.push(name);
-            save('settings', state.settings); applyLanguageFilter(); render();
-          };
-          groupChipBox.appendChild(c);
-        })(groups[g]);
-      }
-      el.content.appendChild(groupChipBox);
-      if (groups.length > 80) {
-        el.content.appendChild(element('div', 'detail-meta',
-          (groups.length - 80) + ' weitere Kategorien werden hier nicht gezeigt.'));
-      }
+      el.content.appendChild(categoryPicker(
+        groups,
+        function (name) { return state.settings.hiddenGroups.indexOf(name) >= 0; },
+        function (name) {
+          var idx = state.settings.hiddenGroups.indexOf(name);
+          if (idx >= 0) state.settings.hiddenGroups.splice(idx, 1);
+          else state.settings.hiddenGroups.push(name);
+          save('settings', state.settings);
+          applyLanguageFilter();
+          // Die Überschrift zeigt die Anzahl – ohne Auffrischen bliebe sie stehen.
+          if (kopf) {
+            kopf.textContent = 'Kategorien ausblenden (' +
+              state.settings.hiddenGroups.length + ' von ' + groups.length + ')';
+          }
+        },
+        'hide', '✕'));
     }
 
     // ---- Kindersicherung ----
@@ -1903,27 +2000,21 @@
       }, true));
       el.content.appendChild(lockActions);
 
-      el.content.appendChild(element('div', 'detail-meta',
-        state.settings.lockedGroups.length + ' Kategorien gesperrt.'));
-      var lockChips = element('div', 'chips');
+      var sperrKopf = element('div', 'detail-meta',
+        state.settings.lockedGroups.length + ' Kategorien gesperrt.');
+      el.content.appendChild(sperrKopf);
       var gs = allGroups();
-      for (var h = 0; h < gs.length && h < 80; h++) {
-        (function (name) {
-          var locked = state.settings.lockedGroups.indexOf(name) >= 0;
-          var c = element('span', 'chip focusable' + (locked ? ' active' : ''),
-            (locked ? '🔒 ' : '') + name);
-          c.tabIndex = 0;
-          c.setAttribute('data-fkey', 'lock:' + name);
-          c.onclick = function () {
-            var idx = state.settings.lockedGroups.indexOf(name);
-            if (idx >= 0) state.settings.lockedGroups.splice(idx, 1);
-            else state.settings.lockedGroups.push(name);
-            save('settings', state.settings); render();
-          };
-          lockChips.appendChild(c);
-        })(gs[h]);
-      }
-      el.content.appendChild(lockChips);
+      el.content.appendChild(categoryPicker(
+        gs,
+        function (name) { return state.settings.lockedGroups.indexOf(name) >= 0; },
+        function (name) {
+          var idx = state.settings.lockedGroups.indexOf(name);
+          if (idx >= 0) state.settings.lockedGroups.splice(idx, 1);
+          else state.settings.lockedGroups.push(name);
+          save('settings', state.settings);
+          sperrKopf.textContent = state.settings.lockedGroups.length + ' Kategorien gesperrt.';
+        },
+        'lock', '🔒'));
     }
   }
 

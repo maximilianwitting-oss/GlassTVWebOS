@@ -28,7 +28,10 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   Wechsel tauscht das komplette Schema – Flächen, Ränder und Textfarben ziehen
   mit, sonst stünde eine dunkle Karte auf hellem Grund.
 - **Sprachfilter** mit demselben Sicherheitsnetz wie iOS, **Kategorien
-  ausblenden** und **Kindersicherung** (PIN sperrt Kategorien app-weit).
+  ausblenden** und **Kindersicherung** (PIN sperrt Kategorien app-weit). Beide
+  Kategorielisten haben ein Suchfeld – die getestete Playlist hat 1140
+  Kategorien, ohne Suche wären die alphabetisch hinteren unerreichbar (und
+  gerade die 18+-Kategorien heißen typisch „XXX …").
 - **Profile** mit „Wer schaut?"-Auswahl beim Start (erscheint nur ab dem
   zweiten Profil). Favoriten, Merkliste und Verlauf sind profilbezogen; das
   Hauptprofil behält bewusst die alten Speicherschlüssel, damit bestehende

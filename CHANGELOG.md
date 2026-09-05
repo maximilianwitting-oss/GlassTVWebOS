@@ -1,5 +1,14 @@
 # Änderungen
 
+## 1.10.1
+- **Suchfeld für Kategorien** in „Kategorien ausblenden", in der Kindersicherung
+  und über den Listen in Live TV / Filme / Serien. Vorher waren nur die ersten
+  80 bzw. 40 Kategorien erreichbar – bei 1140 Kategorien also ein Bruchteil,
+  und ausgerechnet die alphabetisch hinten liegenden 18+-Kategorien ließen sich
+  nicht sperren.
+- Die gewählte Kategorie wird in der Leiste immer angezeigt, auch wenn sie
+  hinter Position 40 liegt.
+
 ## 1.8.0
 - **Mini-Ansicht entfernt.** Auf dem Fernseher lief dort nur der Ton weiter, weil
   sich die Videoebene nicht verkleinern lässt (siehe README).
