@@ -14,6 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
+  var APP_VERSION = '1.11.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -1720,6 +1721,20 @@
       'Speicher reicht für Filme ohnehin nicht. Am Fernseher, der ohnehin am Netz ' +
       'hängt, bringt Offline auch wenig – auf iPhone und Quest gibt es die Funktion.'));
 
+    // Modell und Firmware nennen, damit bei einer Rückfrage klar ist, worauf
+    // die App läuft (LG unterscheidet sich je Baujahr erheblich).
+    var geraet = element('p', null, 'Gerät wird ermittelt …');
+    panel.appendChild(geraet);
+    if (typeof webOS !== 'undefined' && webOS.deviceInfo) {
+      webOS.deviceInfo(function (info) {
+        geraet.textContent = 'Gerät: ' + (info.modelName || 'unbekannt') +
+          '  ·  webOS ' + (info.sdkVersion || info.version || '?') +
+          '  ·  GlassTV ' + APP_VERSION;
+      });
+    } else {
+      geraet.textContent = 'GlassTV ' + APP_VERSION;
+    }
+
     panel.appendChild(element('div', 'section-title', 'Bibliothek'));
     panel.appendChild(element('p', null,
       state.library.channels.length + ' Sender · ' + state.library.movies.length +
@@ -2548,16 +2563,10 @@
    * Deshalb hier drei Wege, vom besten zum gröbsten.
    */
   function exitApp() {
+    // Der reguläre Weg – die Plattform blendet die App sauber aus.
     if (typeof webOS !== 'undefined' && webOS.platformBack) { webOS.platformBack(); return; }
-    if (typeof window.close === 'function') {
-      try { window.close(); return; } catch (e) { /* weiter unten */ }
-    }
-    // Letzter Ausweg: Der Systemdienst schließt die App zuverlässig.
-    try {
-      var b = new PalmServiceBridge();
-      b.onservicecallback = function () {};
-      b.call('luna://com.webos.applicationManager/close', JSON.stringify({ id: 'de.app.glasstv' }));
-    } catch (e2) { /* dann bleibt nur die Home-Taste */ }
+    // Nur falls die Bibliothek fehlt (Browser-Test): grob, aber wirksam.
+    try { window.close(); } catch (e) { /* dann bleibt die Home-Taste */ }
   }
 
   // ------------------------------------------------------------ Start ----
@@ -2654,6 +2663,19 @@
       } catch (e) { /* dann hilft nur noch der Neustart */ }
       return false;
     };
+
+    /*
+     * `handlesRelaunch` in appinfo.json bedeutet: Startet der Nutzer die App
+     * erneut, während sie schon läuft, wird sie NICHT neu geladen – stattdessen
+     * kommt dieses Ereignis. Ohne Behandlung stünde er dort, wo er zuletzt war,
+     * inklusive offenem Player.
+     */
+    document.addEventListener('webOSRelaunch', function () {
+      if (player.open) closePlayer();
+      state.view = null;
+      state.tab = 'home';
+      render();
+    });
 
     document.addEventListener('keydown', onKey);
 

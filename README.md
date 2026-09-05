@@ -41,6 +41,8 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
 - **Empfehlungen**: „Für dich" und „Weil du … gesehen hast" aus der
   Kategorie-Affinität des Verlaufs, mit Recency-Decay 1/(1+Tage/7) wie in der
   iOS-App – ohne den Abfall bestimmt für immer, was man einmal gesehen hat.
+- **Zurück-Taste** in drei Stufen: Unteransicht → Liste, anderer Tab →
+  Startseite, Startseite → App beenden (über `webOS.platformBack()`).
 - **Bedienung**: vollständig mit der Fernbedienung. Der Fokus wandert
   *geometrisch* (nicht in DOM-Reihenfolge), damit Raster und Reihen sich
   räumlich anfühlen. Farbtasten: grün = Guide, gelb = Suche, blau = Favorit.
@@ -148,6 +150,8 @@ Oder bequemer: `./install.sh <TV-IP>` erledigt Schritt für Schritt dasselbe.
 
 ```
 src/
+  lib/webOSTV.js LGs offizielle Bibliothek (Apache 2.0, aus dem SDK; siehe
+                 lib/HERKUNFT.md) – liefert platformBack, deviceInfo, service
   appinfo.json   webOS-Manifest (id, Icons, Hintergrundfarbe)
   index.html     Gerüst: Kopf, Inhalt, Player-Overlay, Toast
   style.css      10-Fuß-Layout, Fokus-Hervorhebung, Design-Hintergrund

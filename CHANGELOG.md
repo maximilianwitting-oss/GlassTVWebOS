@@ -1,5 +1,16 @@
 # Änderungen
 
+## 1.11.0
+- **webOSTV.js eingebunden** (LGs offizielle Bibliothek 1.2.13 aus dem SDK,
+  Apache 2.0). Damit läuft das Beenden über `webOS.platformBack()` statt über
+  einen Umweg.
+- Zurück-Taste eskaliert sauber: Unteransicht → Liste, Tab → Startseite,
+  Startseite → beenden.
+- Neustart bei laufender App (`webOSRelaunch`) schließt einen offenen Player
+  und kehrt zur Startseite zurück.
+- Einstellungen nennen Modell, webOS-Version und App-Version – hilfreich bei
+  Rückfragen, weil sich LG-Geräte je Baujahr stark unterscheiden.
+
 ## 1.10.1
 - **Suchfeld für Kategorien** in „Kategorien ausblenden", in der Kindersicherung
   und über den Listen in Live TV / Filme / Serien. Vorher waren nur die ersten

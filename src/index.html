@@ -38,6 +38,13 @@
 
   <div id="toast"></div>
 
+  <!--
+    Offizielle LG-Bibliothek (Apache 2.0, siehe lib/HERKUNFT.md). Muss VOR
+    app.js stehen: Ohne sie ist `webOS` undefiniert, und weil appinfo.json
+    `disableBackHistoryAPI` setzt, käme man mit der Zurück-Taste nicht mehr
+    aus der App heraus.
+  -->
+  <script src="lib/webOSTV.js"></script>
   <script src="core.js"></script>
   <script src="app.js"></script>
 </body>
