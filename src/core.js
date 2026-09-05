@@ -182,6 +182,17 @@
 
     result.series = seriesOrder.map(function (k) { return seriesByName[k]; })
       .sort(function (a, b) { return a.title.localeCompare(b.title); });
+    /*
+     * Folgen nach Staffel und Nummer sortieren – wie es `parseEpisodes` fuer
+     * Xtream tut. Ohne das stand die Folgenliste in Playlist-Reihenfolge, und
+     * „naechste Folge" nahm den Datei-Nachfolger: Nach S01E05 lief S01E02.
+     */
+    for (var si = 0; si < result.series.length; si++) {
+      var eps = result.series[si].episodes;
+      if (eps && eps.length > 1) {
+        eps.sort(function (a, b) { return (a.season - b.season) || (a.episode - b.episode); });
+      }
+    }
     return result;
   }
 

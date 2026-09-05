@@ -1387,6 +1387,9 @@
           // Waehrend der Player offen war, wurde nichts neu aufgebaut – das zuletzt
     // fokussierte Element existiert noch und wird behalten. `focusFirst` warf
     // es weg: Nach Sender 300 stand man wieder bei Sender 1.
+    // Neu zeichnen: Sonst fehlt auf der Detailseite „Weiter ab …", und die
+    // Folgenliste zeigt den Fortschritt der gerade gesehenen Folge nicht.
+    if (state.view) render();
     setTimeout(ensureFocus, 0);
         };
         el.tabs.appendChild(b);
@@ -2059,6 +2062,21 @@
     });
   }
 
+  /**
+   * Startposition einer Folge – frisch gelesen und mit derselben 95-%-Regel
+   * wie bei Filmen. Vorher wurde der Stand beim Aufbau eingefangen und ohne
+   * Schwelle benutzt: Eine zu Ende gesehene Folge sprang ans Ende und damit
+   * sofort in die naechste, und nach der Rueckkehr aus dem Player galt noch
+   * der alte Wert.
+   */
+  function folgeStart(id) {
+    var p = state.progress[id];
+    if (!p || !(p.duration > 0)) return 0;
+    if (p.position <= 30) return 0;
+    if ((p.position / p.duration) >= 0.95) return 0;
+    return p.position;
+  }
+
   function renderSeriesDetail(s) {
     el.content.appendChild(backButton());
     el.content.appendChild(detailHeader(s.title, s.backdropURL || s.posterURL,
@@ -2128,7 +2146,7 @@
         row.appendChild(info);
         row.onclick = function () {
           playItem(s.title + ' · ' + label, streamUrlOf(ep), ep.title, 'episode', ep.id,
-            p ? p.position : 0, { series: s, episode: ep },
+            folgeStart(ep.id), { series: s, episode: ep },
             { image: ep.imageURL || s.posterURL, group: s.group });
         };
         box.appendChild(row);
@@ -3401,6 +3419,8 @@
   // webOS-Fernbedienung: Pfeile 37–40, OK 13, Zurück 461.
   // Farbtasten: rot 403, grün 404, gelb 405, blau 406.
   // Medientasten: Play 415, Pause 19, Stop 413, FF 417, RW 412.
+  var beendenBestaetigt = false;
+
   function onKey(e) {
     var code = e.keyCode;
 
@@ -3457,6 +3477,21 @@
         state.katWahl.series = null; render(); e.preventDefault(); return;
       }
       if (state.tab !== 'home') { state.tab = 'home'; render(); e.preventDefault(); return; }
+      /*
+       * Nicht sofort beenden: Im Einrichtungsformular ist Zurueck die
+       * naheliegende Geste, um die Bildschirmtastatur zu schliessen, und
+       * waehrend des Ladens waeren 40 Sekunden umsonst. Deshalb wie auf webOS
+       * ueblich erst eine Bestaetigung.
+       */
+      if (state.loading || !state.source) {
+        if (!beendenBestaetigt) {
+          beendenBestaetigt = true;
+          toast('Zum Beenden noch einmal Zurück drücken.', 3000);
+          setTimeout(function () { beendenBestaetigt = false; }, 3000);
+          e.preventDefault();
+          return;
+        }
+      }
       exitApp();
       e.preventDefault();
       return;
