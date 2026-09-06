@@ -2468,7 +2468,9 @@
 
     for (var j = 0; j < sichtbar.length; j++) {
       (function (g) {
-        var c = element('span', 'chip focusable' + (selected === g ? ' active' : ''), g);
+        // Auch die Gruppen-Chips tragen den Zeichenmuell des Anbieters.
+        var c = element('span', 'chip focusable' + (selected === g ? ' active' : ''),
+          Core.titelKurz(g));
         c.tabIndex = 0;
         c.setAttribute('data-fkey', 'group:' + g);
         c.onclick = function () { onPick(g); };
@@ -2855,7 +2857,7 @@
     return button('‹ Zurück', function () { ansichtZurueck(); }, true);
   }
 
-  function detailHeader(title, backdrop, metaText) {
+  function detailHeader(title, backdrop, metaText, gruppe) {
     var head = element('div', 'detail-head');
     var bd = element('div', 'detail-backdrop');
     if (backdrop) {
@@ -2880,7 +2882,7 @@
      * Beschreibung und Aktionen (der Abspiel-Knopf lag bei 959 von 1080 px).
      */
     var textbox = element('div', 'detail-textbox');
-    textbox.appendChild(element('h2', 'detail-title', title));
+    textbox.appendChild(element('h2', 'detail-title', anzeigeName(title, gruppe)));
     if (metaText) textbox.appendChild(element('div', 'detail-meta', metaText));
     bd.appendChild(textbox);
 
@@ -2975,7 +2977,8 @@
     if (m.durationSeconds) meta.push(durationText(m.durationSeconds));
     if (m.rating) meta.push('★ ' + Number(m.rating).toFixed(1));
     if (m.genre) meta.push(m.genre);
-    el.content.appendChild(detailHeader(m.title, m.backdropURL || m.posterURL, meta.join('   ·   ')));
+    el.content.appendChild(detailHeader(m.title, m.backdropURL || m.posterURL,
+      meta.join('   ·   '), m.group));
 
     var resume = state.progress[m.id];
     var actions = element('div', 'detail-actions');
@@ -3118,7 +3121,8 @@
   function renderSeriesDetail(s) {
     el.content.appendChild(backButton());
     el.content.appendChild(detailHeader(s.title, s.backdropURL || s.posterURL,
-      s.episodes.length + ' Folgen' + (s.rating ? '   ·   ★ ' + Number(s.rating).toFixed(1) : '')));
+      s.episodes.length + ' Folgen' + (s.rating ? '   ·   ★ ' + Number(s.rating).toFixed(1) : ''),
+      s.group));
 
     var actions = element('div', 'detail-actions');
     actions.appendChild(button(isFavorite(s.id) ? '★ Favorit' : '☆ Favorit', function () {

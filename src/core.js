@@ -1300,18 +1300,34 @@
   var QUALITAET_ENDE =
     /[\s|:·\-]*\b(?:4K|UHD|FHD|HD|SD|2160P?|1080P?|720P?|DOLBY(?:\s+(?:AUDIO|VISION|ATMOS))?|ATMOS|VISION)\b[\s|:·\-]*$/i;
 
+  /** Leerraum zusammenziehen und Trennzeichen an den Raendern abschneiden. */
+  function randPutzen(t) {
+    return t.replace(/\s{2,}/g, ' ')
+            .replace(/^[\s|:·\-\/]+/, '')
+            .replace(/[\s|:·\-\/]+$/, '');
+  }
+
   function titelKurz(titel) {
     var roh = String(titel || '');
-    var t = roh.replace(HOCHGESTELLT, ' ');
+    // Stufe 1: nur die hochgestellten Ketten. Das allein macht schon jeden
+    // Namen lesbar und ist der Rueckfall, wenn Stufe 2 zu viel wegnimmt.
+    var ohneHoch = randPutzen(roh.replace(HOCHGESTELLT, ' '));
+
+    // Stufe 2: Qualitaetsangaben am Ende, auch in normaler Schrift.
     // Dreimal: „… 4K UHD Dolby Audio" braucht drei Durchlaeufe.
-    t = t.replace(QUALITAET_ENDE, '').replace(QUALITAET_ENDE, '')
-         .replace(QUALITAET_ENDE, '');
-    t = t.replace(/\s{2,}/g, ' ')
-         .replace(/^[\s|:·\-]+/, '')
-         .replace(/[\s|:·\-]+$/, '');
-    // Notausgang: Ein Titel, der NUR aus Qualitaetsangaben besteht, waere sonst
-    // leer – dann lieber das Original als eine namenlose Zeile.
-    return t.length >= 2 ? t : roh;
+    var t = ohneHoch.replace(QUALITAET_ENDE, '').replace(QUALITAET_ENDE, '')
+                    .replace(QUALITAET_ENDE, '');
+    t = randPutzen(t);
+
+    /*
+     * Notausgang in ZWEI Stufen. Vorher fiel er auf das rohe Original zurueck –
+     * und ausgerechnet bei einer Gruppe wie „4K| ᵁᴴᴰ ³⁸⁴⁰ᴾ", die vollstaendig
+     * aus Qualitaetsangaben besteht, stand danach wieder der ganze
+     * Zeichenmuell da. Jetzt bleibt wenigstens die aufgeraeumte Fassung.
+     */
+    if (t.length >= 2) return t;
+    if (ohneHoch.length >= 2) return ohneHoch;
+    return roh;
   }
 
   /*
