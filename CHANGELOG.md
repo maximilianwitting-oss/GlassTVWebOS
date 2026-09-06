@@ -1,5 +1,62 @@
 # Änderungen
 
+## 1.15.0
+
+**Filme und Serien kommen kategorieweise statt am Stück.** Die Antwort auf
+`get_vod_streams` ist bei der getesteten Playlist 58 MB und band rund 50 MB
+dauerhaft. Beim Start kommen jetzt nur noch die Kategorienlisten (24 KB); der
+Inhalt einer Kategorie folgt beim Öffnen in etwa einer Viertelsekunde, drei
+Kategorien bleiben zwischengespeichert. Auf dem Gerät gemessen (42.915 Sender
+/ 142.246 Filme / 31.569 Serien): Prozess 388 → 205 MB, JS-Heap nach dem Start
+82 → 21 MB, bis die Bibliothek steht 72 → 41 s. M3U-Quellen bleiben unverändert
+– dort steht ohnehin alles in einer Datei.
+
+**Titelverzeichnis für die Suche** (zuschaltbar): Ohne die Filme im Speicher
+sucht die App zunächst nur in den geöffneten Kategorien. Ein Knopf im
+Suchbildschirm macht alle 142.246 Titel durchsuchbar, für rund 45 MB statt der
+etwa 150 MB eines vollen Objektgraphen. Der Aufbau läuft ohne `JSON.parse`;
+gegen dieses geprüft: 0 Abweichungen über alle Einträge.
+
+**Kindersicherung – zwei Umgehungen geschlossen.** Der Titelindex bildete
+unbekannte Kategorie-Kennungen auf „Allgemein" ab, einen Namen, der nie in den
+Sperrlisten steht; Panels, die ihre 18+-Rubrik aus der Kategorienliste
+heraushalten, hebelten die PIN damit aus. Und der Verlauf wurde nirgends
+gefiltert: Titel und Poster gesperrter Kategorien standen weiter unter
+„Weiterschauen".
+
+**Favoriten, Merkliste und Weiterschauen funktionieren wieder.** Sie wurden
+über die Bibliothek aufgelöst, die beim kategorieweisen Laden leer ist – ein
+gemerkter Film verschwand sofort wieder. Sie führen ihre Anzeigedaten jetzt
+selbst, und Abspieladressen lassen sich aus der Kennung rekonstruieren.
+Serienfolgen wurden von „Weiterschauen" grundsätzlich nie gefunden.
+
+**Bedienung**: Auf dem Profilschirm war die Zurück-Taste tot – aus dem ersten
+Bildschirm der App kam man nur über die Home-Taste heraus (LG prüft das).
+Während eine Kategorie lud, gab es kein bedienbares Element; jetzt Spinner mit
+Abbrechen. Umschaltknöpfe wie „☆ Favorit" verloren beim Klick den Fokus an den
+Seitenanfang. Zurück aus einem Suchtreffer verwarf die ganze Eingabe. Der
+Erstfokus liegt auf „Abspielen" bzw. im Suchfeld, OK löst die Suche aus. Die
+Farbtasten haben eine Legende. Die rote Taste springt an den Listenanfang.
+Deckelungen werden benannt („30 von 142") statt zu schweigen.
+
+**Darstellung**: Knöpfe und Tabs erbten die Schriftart nicht und rendeten in
+Arial, während die Chips daneben in LG Smart UI standen. Die Fehlermeldung war
+fest verdrahtet und lag auf den zwölf dunklen Designs bei 2,3:1. Kartentitel
+wurden in der dritten Zeile angeschnitten. Statistikbalken waren auf hellen
+Designs heller als ihr Grund. Der Favoritenstern trug den roten Live-Punkt.
+Die 18 Design-Chips lagen in einer nicht umbrechenden Reihe von 2250 Pixeln.
+
+**Fehlerfälle**: Falsche oder abgelaufene Zugangsdaten führen zurück zur
+Einrichtung mit klarer Meldung, statt nach acht Sekunden „nichts geladen"
+stehen zu lassen. Netzausfälle werden von abgelehnten Anmeldungen getrennt und
+bieten „Erneut versuchen". Zu Ende gesehene Folgen starten wieder von vorn
+statt am Ende. Bei M3U-Serien werden die Folgen nach Staffel und Nummer
+sortiert – „nächste Folge" nahm vorher den Datei-Nachfolger.
+
+**Veröffentlichung**: MIT-Lizenz (LGs `webOSTV.js` bleibt Apache 2.0, siehe
+`THIRD-PARTY.md`), Unterlagen für die Einreichung im LG Content Store unter
+`RELEASE.md` und `docs/`.
+
 ## 1.14.0
 - **Magic-Remote-Zeiger unterstützt**: Der Fokus folgt dem Zeiger; bei
   sichtbarem Zeiger wird der Fokusring ruhiger. Zertifizierungskriterium bei LG.
