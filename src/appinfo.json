@@ -1,6 +1,6 @@
 {
   "id": "de.app.glasstv",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "vendor": "Maximilian Witting",
   "type": "web",
   "main": "index.html",
@@ -13,7 +13,7 @@
   "supportPortraitMode": false,
   "appDescription": "Spielt deine eigenen IPTV-Playlisten ab – Xtream Codes oder M3U.",
   "resolution": "1920x1080",
-  "requiredMemory": 400,
+  "requiredMemory": 512,
   "handlesRelaunch": true,
   "vendorUrl": "https://witting.info"
 }

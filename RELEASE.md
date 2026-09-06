@@ -11,13 +11,13 @@ läuft. Technisch ist die App einreichbereit:
 |---|---|
 | `appinfo.json` vollständig | ja – id, version, vendor, icons, bgColor, resolution |
 | Icons in LG-Größen | 80×80 und 130×130, geprüft |
-| `requiredMemory` | **400 MB** – die 320 lagen unter der eigenen Messung. Auf dem OLED77C9PLA gemessen: 214 MB Betrieb, 217 MB mit Titelverzeichnis, **Spitze beim Start 337 MB**, mit laufendem Video bis 333 MB. `requiredMemory` ist die Zusage, an der webOS die App misst; überschreitet sie, ist sie der erste Kandidat für den Low-Memory-Killer – ausgerechnet beim Start und beim Abspielen, den beiden Momenten des Funktionstests. |
+| `requiredMemory` | **512 MB**. Fein gemessen auf dem OLED77C9PLA (alle 3 s): Spitze **404 MB nach 6 Sekunden** in der Startphase, zweite Spitze 273 MB beim Aufbau des Titelverzeichnisses im Leerlauf, Dauerzustand **157 MB**. Die vorherigen 400 lagen unter der Spitze — `requiredMemory` ist die Zusage, an der webOS misst, und wer sie ueberschreitet ist der erste Kandidat fuer den Low-Memory-Killer. Die Startspitze selbst zu senken ist die naechste Aufgabe; sie stammt aus der Startphase, nicht aus dem Verzeichnis. |
 | Beenden über Zurück-Taste | ja, `webOS.platformBack()` – LG prüft das |
 | Vollständig mit Fernbedienung bedienbar | ja, inkl. Magic-Remote-Zeiger |
 | Auflösung 1920×1080 | ja |
 | Fehlerfall falsche Zugangsdaten | klare Meldung, führt zurück zur Einrichtung |
 | Debug-Reste im Code | keine `console.log`, kein `debugger` (maschinell geprüft) |
-| Tests | 63 Core + 17 UI, alle grün |
+| Tests | 67 Core + 17 UI, alle grün |
 
 ## Was noch fehlt – und nur du erledigen kannst
 

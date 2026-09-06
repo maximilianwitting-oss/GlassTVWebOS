@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.20.0';
+  var APP_VERSION = '1.21.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -45,6 +45,7 @@
     setupFokusGesetzt: false,
     filmIndex: null,        // schlanker Titelindex, nur auf Wunsch
     serienIndex: null,      // dasselbe fuer Serien
+    indexFehler: null,      // welcher Teil des Verzeichnisses fehlt
     indexLaedt: false,
     vodKategorien: [],      // [{ id, name }]
     serienKategorien: [],
@@ -3225,6 +3226,12 @@
   // ---- Suche ----
 
   function renderSearch() {
+    /*
+     * Vorziehen: Wer die Suche oeffnet, braucht das Verzeichnis jetzt – nicht
+     * in zwanzig Sekunden. Der Leerlauf-Eintrag verfaellt danach von selbst,
+     * weil `verzeichnisFaellig()` dann falsch ist.
+     */
+    if (verzeichnisFaellig()) verzeichnisAufbauen(true);
     el.content.appendChild(backButton());
     var panel = element('div', 'panel');
     panel.appendChild(element('h2', null, 'Suche'));
@@ -3285,6 +3292,8 @@
       var out = [];
       for (var j = 0; j < treffer.length && j < limit; j++) out.push(treffer[j].o);
       out.gesamt = treffer.length;
+      // Bester Rang der Sparte – danach werden die Sparten geordnet.
+      out.spitze = treffer.length ? treffer[0].r : 0;
       return out;
     }
 
@@ -3315,28 +3324,254 @@
       sr = search(state.library.series, 'title', 30);
     }
 
+    // Zwei Bereiche, die bisher gar nicht durchsucht wurden. Beide liegen
+    // ohnehin im Speicher und kosten zusammen unter 10 ms.
+    var pg = sendungenSuchen(q, qTeile, 20);
+    var kt = kategorienSuchen(q, qTeile, 12);
+
     if (state.lazyKatalog) el.content.appendChild(indexHinweis());
 
-    if (!ch.length && !mv.length && !sr.length) {
+    if (!ch.length && !mv.length && !sr.length && !pg.length && !kt.length) {
       el.content.appendChild(element('div', 'section-title', 'Keine Treffer'));
       el.content.appendChild(element('div', 'detail-meta',
-        'Für „' + state.view.query + '“ wurde nichts gefunden.'));
+        'Für „' + state.view.query + '“ wurde in keinem Bereich etwas gefunden' +
+        (state.indexLaedt ? ' – der Katalog wird gerade noch erfasst.' : '.')));
       return;
     }
-    if (ch.length) {
-      el.content.appendChild(element('div', 'section-title', spartenTitel('Sender', ch)));
-      var box = document.createElement('div');
-      for (var i = 0; i < ch.length; i++) box.appendChild(channelRow(ch[i], null));
-      el.content.appendChild(box);
+
+    /*
+     * Die Sparten nach ihrem BESTEN Treffer ordnen, nicht in fester Reihe.
+     *
+     * Gegen 25 realistische Anfragen gemessen stand in 9 von 25 Faellen (36 %)
+     * die schwaechere Sparte oben: „john wick" zeigte zuerst Sender (bester
+     * Rang 689) statt Filme (996), „stirb langsam" und „herr der ringe" sogar
+     * eine LEERE Sparte zuerst. Auf 1080 px passt nur eine Sparte auf den
+     * Schirm – eine feste Reihenfolge fuehrt damit jedes dritte Mal an der
+     * Antwort vorbei.
+     *
+     * Die Raenge sind ueber die Sparten hinweg vergleichbar, weil alle
+     * dieselbe Formel und denselben Laengenabzug benutzen.
+     */
+    var sparten = [
+      { name: 'Sender', treffer: ch, bau: function () {
+          var box = document.createElement('div');
+          for (var i = 0; i < ch.length; i++) box.appendChild(channelRow(ch[i], null));
+          el.content.appendChild(element('div', 'section-title', spartenTitel('Sender', ch)));
+          el.content.appendChild(box);
+        } },
+      { name: 'Läuft jetzt und demnächst', treffer: pg, bau: function () {
+          el.content.appendChild(element('div', 'section-title',
+            spartenTitel('Läuft jetzt und demnächst', pg)));
+          var box = document.createElement('div');
+          for (var i = 0; i < pg.length; i++) box.appendChild(sendungZeile(pg[i]));
+          el.content.appendChild(box);
+        } },
+      { name: 'Filme', treffer: mv, bau: function () {
+          var r1 = shelf(spartenTitel('Filme', mv), mv, function (m) {
+            return card(m.title, m.posterURL, function () { openMovie(m); },
+              false, m.id, null, m.group);
+          });
+          if (r1) el.content.appendChild(r1);
+        } },
+      { name: 'Serien', treffer: sr, bau: function () {
+          var r2 = shelf(spartenTitel('Serien', sr), sr, function (x) {
+            return card(x.title, x.posterURL, function () { openSeries(x); },
+              false, x.id, null, x.group);
+          });
+          if (r2) el.content.appendChild(r2);
+        } },
+      { name: 'Kategorien', treffer: kt, bau: function () {
+          el.content.appendChild(element('div', 'section-title',
+            spartenTitel('Kategorien', kt)));
+          var box = element('div', 'chips umbruch');
+          for (var i = 0; i < kt.length; i++) box.appendChild(kategorieChip(kt[i]));
+          el.content.appendChild(box);
+        } }
+    ];
+    // Zweitschluessel, weil `Array#sort` auf Chromium 53 nicht stabil ist.
+    for (var si = 0; si < sparten.length; si++) sparten[si].nr = si;
+    sparten.sort(function (a, b) {
+      return (b.treffer.spitze || 0) - (a.treffer.spitze || 0) || a.nr - b.nr;
+    });
+    for (var sj = 0; sj < sparten.length; sj++) {
+      if (sparten[sj].treffer.length) sparten[sj].bau();
     }
-    var s1 = shelf(spartenTitel('Filme', mv), mv, function (m) {
-      return card(m.title, m.posterURL, function () { openMovie(m); }, false, m.id, null, m.group);
-    });
-    if (s1) el.content.appendChild(s1);
-    var s2 = shelf(spartenTitel('Serien', sr), sr, function (s) {
-      return card(s.title, s.posterURL, function () { openSeries(s); }, false, s.id, null, s.group);
-    });
-    if (s2) el.content.appendChild(s2);
+  }
+
+  /**
+   * Sendungen im laufenden Programm durchsuchen.
+   *
+   * Bisher gar nicht durchsucht, obwohl rund 37.858 Sendungen im Speicher
+   * liegen: „Was laeuft gerade?" war ueber die Suche nicht zu beantworten.
+   *
+   * Die Sparte heisst bewusst „Laeuft jetzt und demnaechst" und nicht „heute
+   * Abend": Das EPG behaelt nur ein Fenster von -2 bis +6 Stunden. Vor dem
+   * spaeten Nachmittag steht der Abend schlicht nicht darin, und eine
+   * Ueberschrift, die mehr verspricht, waere schlimmer als eine, die ihre
+   * Grenze nennt. Das Fenster zu verbreitern kostete gemessen 347 MB Heap.
+   */
+  function sendungenSuchen(q, qTeile, limit) {
+    var out = [];
+    out.gesamt = 0; out.spitze = 0;
+    if (!state.epg) return out;
+    var karte = epgSenderKarte();
+    var jetzt = Date.now();
+    var treffer = [], n = 0;
+    for (var key in state.epg) {
+      if (!Object.prototype.hasOwnProperty.call(state.epg, key)) continue;
+      var ch = karte[key];
+      /*
+       * Ohne sichtbaren Sender kein Treffer. Ein gesperrter oder
+       * ausgeblendeter Sender darf hier so wenig auftauchen wie in der
+       * Senderliste – sonst waere die neue Sparte genau der Weg an der
+       * Kindersicherung vorbei, den `indexSuche` sorgfaeltig schliesst.
+       */
+      if (!ch || !kategorieErlaubt(ch.group)) continue;
+      var liste = state.epg[key];
+      for (var i = 0; i < liste.length; i++) {
+        var p = liste[i];
+        var r = Core.trefferRang(p.title, q, qTeile);
+        if (r <= 0) continue;
+        // Was JETZT laeuft, ist wertvoller als was in fuenf Stunden kommt –
+        // aber nie so stark, dass es eine Rangstufe kippt.
+        if (p.start <= jetzt && p.end > jetzt) r += 30;
+        treffer.push({ r: r, i: n++, p: p, ch: ch });
+      }
+    }
+    treffer.sort(function (a, b) { return b.r - a.r || a.i - b.i; });
+    for (var k = 0; k < treffer.length && k < limit; k++) out.push(treffer[k]);
+    out.gesamt = treffer.length;
+    out.spitze = treffer.length ? treffer[0].r : 0;
+    return out;
+  }
+
+  /** EPG-Schluessel -> Sender. Einmal je Bibliotheksstand, nicht je Sendung. */
+  var epgSenderCache = null;
+  var epgSenderStempel = -1;
+
+  function epgSenderKarte() {
+    if (epgSenderCache && epgSenderStempel === bibliotheksStempel) return epgSenderCache;
+    var m = Object.create(null);
+    for (var i = 0; i < state.library.channels.length; i++) {
+      var ch = state.library.channels[i];
+      if (!ch.epgID) continue;
+      var k = Core.epgSchluessel(ch.epgID);
+      /*
+       * Der erste gewinnt: Mehrere Qualitaetsvarianten desselben Senders
+       * teilen sich eine tvg-id. Sechsmal „Das Erste" in der Trefferliste ist
+       * keine Auswahl, sondern Rauschen.
+       */
+      if (k && !m[k]) m[k] = ch;
+    }
+    epgSenderCache = m;
+    epgSenderStempel = bibliotheksStempel;
+    return m;
+  }
+
+  /** Eine Trefferzeile fuer eine Sendung: Zeit, Sender, Titel. */
+  function sendungZeile(t) {
+    var p = t.p, ch = t.ch;
+    var jetzt = Date.now();
+    var laeuft = p.start <= jetzt && p.end > jetzt;
+    var row = element('div', 'channel focusable' + (laeuft ? ' on-air' : ''));
+    row.tabIndex = 0;
+    row.setAttribute('data-fkey', 'sendung:' + ch.id + ':' + p.start);
+
+    row.appendChild(element('div', 'archiv-zeit',
+      laeuft ? 'Jetzt' : tagesText(new Date(p.start)) + ' ' + timeText(new Date(p.start))));
+
+    var info = element('div', 'info');
+    info.appendChild(element('div', 'name', p.title));
+    info.appendChild(element('div', 'sub', anzeigeName(ch.name, null) +
+      (p.desc ? '   ·   ' + p.desc : '')));
+    row.appendChild(info);
+    if (laeuft) row.appendChild(element('span', 'badge-live', 'LIVE'));
+
+    /*
+     * Was der Druck bewirkt, haengt davon ab, wann die Sendung laeuft:
+     * gerade -> Sender einschalten; vorbei und Sender hat ein Archiv ->
+     * Zurueckschauen; sonst -> Sender einschalten (mehr kann die App nicht).
+     */
+    if (p.end <= jetzt && ch.archiveDays > 0) {
+      row.appendChild(element('span', 'marke sach', 'Archiv'));
+      row.onclick = function () { openArchiv(ch); };
+    } else {
+      row.onclick = function () { playChannel(ch); };
+    }
+    row._favTarget = ch.id; row._favItem = ch;
+    return row;
+  }
+
+  /**
+   * Kategorien durchsuchen – 1.155 kurze Namen, unter einer Millisekunde.
+   *
+   * Wer „Doku" tippt, will die Rubrik mit vierhundert Dokumentationen, nicht
+   * drei zufaellige Filmtitel mit „Doku" im Namen. Bisher war das gar nicht
+   * auffindbar.
+   */
+  function kategorienSuchen(q, qTeile, limit) {
+    var out = [];
+    out.gesamt = 0; out.spitze = 0;
+    var alle = suchKategorien();
+    var treffer = [];
+    for (var i = 0; i < alle.length; i++) {
+      var r = Core.trefferRang(alle[i].name, q, qTeile);
+      if (r > 0) treffer.push({ r: r, i: i, k: alle[i] });
+    }
+    treffer.sort(function (a, b) { return b.r - a.r || a.i - b.i; });
+    for (var j = 0; j < treffer.length && j < limit; j++) out.push(treffer[j].k);
+    out.gesamt = treffer.length;
+    out.spitze = treffer.length ? treffer[0].r : 0;
+    return out;
+  }
+
+  var suchKatCache = null;
+  var suchKatStempel = -1;
+
+  function suchKategorien() {
+    if (suchKatCache && suchKatStempel === bibliotheksStempel) return suchKatCache;
+    var out = [], i;
+    for (i = 0; i < state.vodKategorien.length; i++) {
+      out.push({ art: 'm', id: state.vodKategorien[i].id, name: state.vodKategorien[i].name });
+    }
+    for (i = 0; i < state.serienKategorien.length; i++) {
+      out.push({ art: 's', id: state.serienKategorien[i].id, name: state.serienKategorien[i].name });
+    }
+    /*
+     * Live-Kategorien gibt es nicht als eigene Liste – die Sender tragen ihren
+     * Gruppennamen. Einmal einsammeln statt bei jeder Suche.
+     */
+    var gesehen = Object.create(null);
+    for (i = 0; i < state.library.channels.length; i++) {
+      var g = state.library.channels[i].group;
+      if (!g || gesehen[g]) continue;
+      gesehen[g] = true;
+      out.push({ art: 'l', id: null, name: g });
+    }
+    // Gesperrtes und Ausgeblendetes gehoert auch hier nicht hin: Sonst waere
+    // die Trefferliste ein Inhaltsverzeichnis der Kindersicherung.
+    var erlaubt = [];
+    for (i = 0; i < out.length; i++) if (kategorieErlaubt(out[i].name)) erlaubt.push(out[i]);
+    suchKatCache = erlaubt;
+    suchKatStempel = bibliotheksStempel;
+    return erlaubt;
+  }
+
+  var KAT_ART = { m: 'Filme', s: 'Serien', l: 'Live TV' };
+
+  function kategorieChip(kat) {
+    var c = element('span', 'chip focusable',
+      KAT_ART[kat.art] + ': ' + Core.titelKurz(kat.name));
+    c.tabIndex = 0;
+    c.setAttribute('data-fkey', 'suchkat:' + kat.art + ':' + (kat.id || kat.name));
+    c.onclick = function () {
+      state.view = null;
+      if (kat.art === 'l') { state.tab = 'live'; state.group.live = kat.name; }
+      else if (kat.art === 'm') { state.tab = 'movies'; state.katWahl.movies = kat; }
+      else { state.tab = 'series'; state.katWahl.series = kat; }
+      render();
+    };
+    return c;
   }
 
   /**
@@ -3346,22 +3581,43 @@
    */
   function indexHinweis() {
     /*
-     * Sobald das Verzeichnis steht, ist das eine reine Statusmeldung – die
-     * bekommt eine schmale Zeile statt eines Panels. Als Panel schob sie die
+     * Eine schmale Statuszeile statt eines Panels: Als Panel schob sie die
      * Trefferliste unter den sichtbaren Bereich, und man sah nach dem Suchen
      * zuerst Weissraum.
      */
     if (state.indexLaedt) {
-      /*
-       * Mit Spinner: Der Aufbau dauert rund 15 Sekunden. Vorher verschwand der
-       * Knopf und es stand nur eine schmale Zeile da – der Nutzer sah Stille
-       * und drueckte irgendwann OK auf „Zurueck".
-       */
       var laden = element('div', 'such-status-zeile');
       laden.appendChild(element('div', 'spinner klein'));
-      laden.appendChild(element('div', 'such-status', state.indexLaedt));
+      /*
+       * Nennen, WAS gerade erfasst wird. Der Aufbau laeuft jetzt im
+       * Hintergrund, und die Suche ueber Sender, Sendungen und Kategorien
+       * funktioniert waehrenddessen – der Nutzer soll sehen, dass sein
+       * Ergebnis gleich noch besser wird, nicht dass er warten soll.
+       */
+      laden.appendChild(element('div', 'such-status',
+        state.indexLaedt + ' Sender und Sendungen sind schon jetzt durchsuchbar.'));
       return laden;
     }
+
+    if (state.indexFehler) {
+      /*
+       * Der wichtigste Zustand, und er fehlte: Wenn der Abruf scheitert, MUSS
+       * das dastehen. Vorher meldete die App nur, was geklappt hatte – bei
+       * gescheitertem Filmabruf also „31.607 Serien durchsuchbar", und der
+       * Nutzer hielt seine Suche fuer vollstaendig.
+       */
+      var fehl = element('div', 'panel');
+      fehl.appendChild(element('div', 'detail-meta',
+        state.indexFehler + ' konnten nicht erfasst werden. Sie sind gerade nur ' +
+        'in den geöffneten Kategorien zu finden – Sender, Sendungen und ' +
+        'Kategorien dagegen vollständig.'));
+      fehl.appendChild(button('Noch einmal versuchen', function () {
+        focusWuenschen('suchfeld');
+        verzeichnisAufbauen(false);
+      }, true, 'indexbauen'));
+      return fehl;
+    }
+
     if (state.filmIndex || state.serienIndex) {
       var box = element('div', 'such-status-zeile');
       var teile = [];
@@ -3374,47 +3630,102 @@
       box.appendChild(button('Neu aufbauen', function () {
         state.filmIndex = null;
         state.serienIndex = null;
-        verzeichnisAufbauen();
+        verzeichnisAufbauen(false);
       }, true, 'indexneu'));
       return box;
     }
-    var box = element('div', 'panel');
-    box.appendChild(element('div', 'detail-meta',
-      'Gesucht wird gerade nur in den geöffneten Kategorien. Das Titelverzeichnis ' +
-      'macht alle Filme und Serien durchsuchbar; es kostet einmalig etwa 15 Sekunden ' +
-      'und rund 14 MB Speicher.'));
-    box.appendChild(button('Alles durchsuchbar machen', function () {
+
+    /*
+     * Kein Verzeichnis und keins im Bau: Das ist nur noch erreichbar, wenn der
+     * Nutzer den automatischen Aufbau abgeschaltet hat – oder bei einer
+     * M3U-Quelle, die gar keins braucht.
+     */
+    if (!state.source || state.source.kind !== 'xtream') {
+      return element('div', 'such-status',
+        'Diese Quelle liefert kein Titelverzeichnis. Gesucht wird in dem, was geladen ist.');
+    }
+    var panel = element('div', 'panel');
+    panel.appendChild(element('div', 'detail-meta',
+      'Filme und Serien sind noch nicht vollständig durchsuchbar – gesucht wird ' +
+      'in den geöffneten Kategorien. Sender, Sendungen und Kategorien sind ' +
+      'vollständig dabei.'));
+    panel.appendChild(button('Alles durchsuchbar machen', function () {
       // Fokus vorbelegen: Der Knopf loest sich beim Aufbau auf, der Merker
       // liefe sonst ins Leere und der Fokus spraenge auf „Zurueck".
       focusWuenschen('suchfeld');
-      verzeichnisAufbauen();
+      verzeichnisAufbauen(false);
     }, true, 'indexbauen'));
-    return box;
+    return panel;
+  }
+
+  /*
+   * Das Titelverzeichnis entsteht jetzt VON ALLEIN.
+   *
+   * Vorher war es ein Knopf im Suchbildschirm, den viele nie gefunden haben –
+   * und ohne ihn durchsuchte die App bei Filmen und Serien nur die hoechstens
+   * drei Kategorien im Zwischenspeicher. Nachgerechnet an diesem Panel: rund
+   * 453 Titel je Kategorie, also etwa 1.359 von 142.386 – **ein Prozent**.
+   * „Titanic" ergab „Keine Treffer", und nichts sagte, dass Filme gar nicht
+   * durchsucht wurden.
+   *
+   * NICHT beim Start: Dort liegt die Speicherspitze schon bei 337 MB von 400
+   * deklarierten, und `loadEpg` zieht gleichzeitig eine dreistellig grosse
+   * XMLTV-Datei. Zwei zweistellige Megabyte-Antworten gleichzeitig waren auf
+   * diesem Geraet der sichere Weg in den Absturz. Im Betrieb liegt die App bei
+   * 214 MB – dort passt es.
+   */
+  var LEERLAUF_VERZUG = 20000;
+  var leerlaufTimer = null;
+
+  /** Darf und soll ein Verzeichnis entstehen? */
+  function verzeichnisFaellig() {
+    var src = state.source;
+    if (!src || src.kind !== 'xtream') return false;   // M3U hat alles im Speicher
+    if (state.filmIndex || state.indexLaedt) return false;
+    if (state.indexFehler) return false;               // nicht in Schleife laufen
+    if (state.settings.autoIndex === false) return false;
+    return !!(state.vodKategorien.length || state.serienKategorien.length);
+  }
+
+  /** Nach dem Start im Leerlauf anstossen. */
+  function verzeichnisImLeerlauf() {
+    if (leerlaufTimer) clearTimeout(leerlaufTimer);
+    leerlaufTimer = setTimeout(function () {
+      leerlaufTimer = null;
+      if (!verzeichnisFaellig()) return;
+      /*
+       * Nicht waehrend der Wiedergabe und nicht, waehrend eine Kategorie laedt:
+       * Der Decoder braucht den Speicher, und zwei Abrufe auf derselben Leitung
+       * lassen den verlieren, auf den der Nutzer gerade wartet.
+       */
+      if (player.open || state.loading || state.katalogLaedt) {
+        verzeichnisImLeerlauf();
+        return;
+      }
+      verzeichnisAufbauen(true);
+    }, LEERLAUF_VERZUG);
   }
 
   /**
-   * Titelverzeichnis holen. Absichtlich OHNE JSON.parse: Der Objektgraph des
-   * vollen Katalogs belegte rund 50 MB, der Scan über den Antworttext liefert
-   * dasselbe für 13 MB (auf dem Gerät gemessen: 142.246 Titel, 5 s laden,
-   * 2 s auswerten).
-   *
-   * Filme UND Serien: Die Suche zeigt „Serien" als eigene Sparte an, durchsucht
-   * hat sie bisher aber nur die geöffneten Kategorien. Wer eine Serie suchte,
-   * deren Rubrik er noch nie geöffnet hatte, bekam „Keine Treffer" – und keinen
-   * Hinweis, dass die Serie sehr wohl da ist.
+   * @param still  true = im Hintergrund, ohne Meldung am Ende. Ein Hinweis auf
+   *               Arbeit, die der Nutzer nicht angefordert hat, ist Laerm.
    */
-  function verzeichnisAufbauen() {
+  function verzeichnisAufbauen(still) {
     var src = state.source;
     if (!src || src.kind !== 'xtream' || state.indexLaedt) return;
     // Ohne Kategorienliste liesse sich nicht entscheiden, was gesperrt ist –
     // dann lieber kein Verzeichnis als eines, das die Sperren umgeht.
     if (!state.vodKategorien.length && !state.serienKategorien.length) {
-      toast('Ohne Kategorienliste lässt sich kein Titelverzeichnis aufbauen. ' +
-        'In den Einstellungen „Neu laden“ versuchen.', 8000);
+      if (!still) {
+        toast('Ohne Kategorienliste lässt sich kein Titelverzeichnis aufbauen. ' +
+          'In den Einstellungen „Neu laden“ versuchen.', 8000);
+      }
       return;
     }
-    state.indexLaedt = 'Titelverzeichnis wird aufgebaut – das dauert etwa 15 Sekunden.';
-    render();
+    state.indexFehler = null;
+    state.indexLaedt = 'Filme werden erfasst …';
+    if (state.view && state.view.type === 'search') render();
+
     holeVerzeichnis('get_vod_streams', Core.scanVodIndex, function (liste) {
       if (liste) state.filmIndex = liste;
       // Serien erst danach: Zwei megabytegrosse Antworten gleichzeitig im
@@ -3424,13 +3735,24 @@
       holeVerzeichnis('get_series', Core.scanSeriesIndex, function (serien) {
         if (serien) state.serienIndex = serien;
         state.indexLaedt = null;
-        var teile = [];
-        if (state.filmIndex) teile.push(state.filmIndex.length + ' Filme');
-        if (state.serienIndex) teile.push(state.serienIndex.length + ' Serien');
-        if (teile.length) toast(teile.join(' und ') + ' durchsuchbar.');
-        else {
-          toast('Titelverzeichnis konnte nicht gelesen werden – die Antwort des ' +
-            'Anbieters hat ein unerwartetes Format.', 8000);
+        /*
+         * EHRLICH melden, was fehlt. Vorher zaehlte die Meldung nur auf, was
+         * geklappt hatte: Scheiterte der Filmabruf, stand da „31.607 Serien
+         * durchsuchbar" – und von den fehlenden 142.000 Filmen kein Wort.
+         * Genau das ist einem Pruefer passiert, dessen Fernseher waehrend des
+         * Abrufs kurz aus dem Netz fiel.
+         */
+        var fehlt = [];
+        if (!state.filmIndex) fehlt.push('Filme');
+        if (!state.serienIndex) fehlt.push('Serien');
+        if (fehlt.length) {
+          state.indexFehler = fehlt.join(' und ');
+          toast(state.indexFehler + ' konnten nicht erfasst werden – sie sind ' +
+            'gerade nur in den geöffneten Kategorien zu finden. Im Suchbildschirm ' +
+            'lässt sich das noch einmal versuchen.', 9000);
+        } else if (!still) {
+          toast(state.filmIndex.length + ' Filme und ' +
+            state.serienIndex.length + ' Serien durchsuchbar.');
         }
         // Nur zeichnen, wenn die Suche noch offen ist: Sonst riss der Aufbau
         // den Nutzer aus der Ansicht, in der er inzwischen war.
@@ -3498,6 +3820,7 @@
     }
     // Zweites Kriterium, weil `Array#sort` auf Chromium 53 nicht stabil ist.
     treffer.sort(function (a, b) { return b.r - a.r || a.i - b.i; });
+    out.spitze = treffer.length ? treffer[0].r : 0;
 
     // Prototypfrei: Sonst ist katName['constructor'] wahr und eine so
     // benannte Kategorie gaelte als bekannt – der Schutz unten fiele aus.
@@ -4535,6 +4858,9 @@
         ' Filme · ' + state.library.series.length + ' Serien');
     }
     render();
+    // Das Titelverzeichnis im Leerlauf nachziehen – nicht waehrend des Starts,
+    // wo die Speicherspitze liegt und das EPG dieselbe Leitung braucht.
+    verzeichnisImLeerlauf();
   }
 
   function loadM3USource(url) {

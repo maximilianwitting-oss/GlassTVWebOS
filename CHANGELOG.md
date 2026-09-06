@@ -1,5 +1,98 @@
 # Änderungen
 
+## 1.21.0 — Die Suche erfasst jetzt alles
+
+Der Anlass war eine Beschwerde: Die Suche fand Filme nicht. Nachgerechnet an
+diesem Panel durchsuchte sie ohne das Titelverzeichnis **rund ein Prozent** des
+Filmkatalogs — höchstens drei Kategorien liegen im Zwischenspeicher, im Schnitt
+453 Titel je Kategorie, also etwa 1.359 von 142.386. „Titanic" ergab „Keine
+Treffer", und nichts sagte, dass Filme gar nicht durchsucht wurden.
+
+### Das Verzeichnis entsteht von allein
+
+Es war ein Knopf im Suchbildschirm, den viele nie fanden. Jetzt baut es sich
+zwanzig Sekunden nach dem Start im Leerlauf auf — und sofort, wenn jemand die
+Suche öffnet. **Nicht während des Starts**: Dort liegt die Speicherspitze, und
+das EPG braucht dieselbe Leitung.
+
+Am Gerät gemessen, alle 3 Sekunden abgetastet: Startspitze 404 MB bei 6 s,
+zweite Spitze beim Verzeichnisaufbau 273 MB bei 21 s, Dauerzustand **157 MB**
+(vorher 214). `requiredMemory` steht jetzt auf 512 — die 400 lagen unter der
+gemessenen Startspitze.
+
+### Ein Regex-Treffer hielt 55 MB fest
+
+V8 merkt sich den Subject-String des letzten erfolgreichen Regex-Treffers, für
+`RegExp.lastMatch`. Der Titel-Scanner matcht auf einem Ausschnitt der
+Katalogantwort — also blieb die **ganze 55-MB-Antwort** danach im Speicher,
+obwohl niemand sie mehr hielt. Dieselbe Familie wie die SlicedString-Falle, die
+dieses Projekt schon einmal 45 MB gekostet hat, nur eine Ebene tiefer.
+
+Gemessen an der echten Antwort: **104,3 MB Heap gegen 49,2 MB.** Der Fix ist ein
+`/x/.exec('x')` am Ende des Scanners.
+
+Ein Test hält das fest — als Quelltextprüfung, und das ist kein Kompromiss aus
+Bequemlichkeit: Der festgehaltene String ist kurz (ein einzelner Datensatz) und
+hält die 55 MB nur über die Elternkette. Weder `RegExp.input` noch seine Länge
+zeigen das. Zwei Verhaltenstests blieben grün, während der Löser entfernt war.
+
+### Zwei Bereiche, die nie durchsucht wurden
+
+**Das laufende Programm.** 37.858 Sendungen liegen im Speicher; „Was läuft
+gerade?" war über die Suche nicht zu beantworten. Die Sparte heißt bewusst
+„Läuft jetzt und demnächst" statt „heute Abend": Das EPG behält nur −2 bis +6
+Stunden, und eine Überschrift, die mehr verspricht, wäre schlimmer als eine, die
+ihre Grenze nennt. Ein Treffer auf eine bereits gelaufene Sendung eines Senders
+mit Archiv führt direkt ins Zurückschauen.
+
+**Die Kategorien** (299 Film- + 230 Serien- + 626 Live-Rubriken). Wer „Doku"
+tippt, will die Rubrik mit vierhundert Dokumentationen, nicht drei zufällige
+Filmtitel. Kostet unter einer Millisekunde.
+
+Beide tragen die Kindersicherung mit: Ein gesperrter Sender taucht auch in der
+neuen Sendungssparte nicht auf — sonst wäre sie genau der Weg an der Sperre
+vorbei, den die Filmsuche sorgfältig schließt.
+
+### Der Rang: treffsicherer und zugleich billiger
+
+Über 25 handgeprüfte Anfragen gemessen: Präzision@5 **68,0 % → 94,4 %**, und
+dabei **schneller** (Faktor 0,89), weil das `toLowerCase()` über 185.000 Titel
+ersatzlos entfällt.
+
+**Das Herkunftskürzel zählt nicht mehr mit.** 94,1 % der Filmtitel tragen eines
+(„DE - ", „4K-NF - "). Mitbewertet erreichte ein Filmtitel nie die Spitzenstufe,
+„4k" lieferte 6.355 Treffer und „de" 31.668 — lauter Kürzelrauschen. Jetzt:
+„4k" → 49, „de" → 9.650 mit sinnvoller Spitze.
+
+**Umlaute ohne Umlauttaste.** „fur" fand vorher keinen einzigen „Für"-Titel (der
+erste stand auf Platz 166), „moerder" fand *nichts*. Gelöst über Zeichenklassen
+in der Anfrage statt einer Faltung der Titel — sechsmal billiger und ohne die
+53-MB-Falle. `String.prototype.normalize` wurde geprüft und verworfen: dreimal
+teurer, löst „ß" und „oe" gar nicht, und braucht ICU, das auf webOS fehlen kann.
+
+**Zahlen.** „rocky 2" lieferte auf allen fünf ersten Plätzen „Rocky III (1982)" —
+die „2" stammte aus der Jahreszahl. Jetzt brauchen Zahlen eine Wortgrenze und
+gelten arabisch wie römisch: „rocky 2" → „Rocky II", „star wars 3" → „Episode
+III" (vorher „Space Wars: Quest for the Deepstar").
+
+**Eine neue Stufe „ganzes Wort"**, und ein Fehler in `istWortgrenze`, der nie
+auffiel: Die Funktion prüfte a–z, 0–9 und Akzente, **aber nicht A–Z**. Das trug,
+solange sie nur auf kleingeschriebene Titel losgelassen wurde.
+
+### Die Sparten ordnen sich nach ihrem besten Treffer
+
+Über 25 Anfragen gemessen stand in **9 von 25 Fällen** die schwächere Sparte
+oben: „john wick" zeigte zuerst Sender, „stirb langsam" sogar eine *leere*
+Sparte. Auf 1080 px passt nur eine Sparte auf den Schirm.
+
+### Wenn etwas scheitert, steht das jetzt da
+
+Scheiterte der Filmabruf, meldete die App „31.607 Serien durchsuchbar" — von den
+fehlenden 142.000 Filmen kein Wort. Genau das ist einem Prüfer passiert, dessen
+Fernseher während des Abrufs kurz aus dem Netz fiel. Jetzt wird benannt, was
+fehlt, mit einem Knopf „Noch einmal versuchen".
+
+
 ## 1.20.0
 
 Diese Runde beruht auf drei Prüfberichten. Zwei Verdachtsfälle wurden dabei am

@@ -704,8 +704,33 @@
         if (tiefe < 0) tiefe = 0;
       }
     }
+    // Sonst haengt die ganze Antwort am letzten Regex-Treffer (siehe oben).
+    regexTrefferLoesen();
     return out;
   }
+
+  /*
+   * V8 haelt den Subject-String des LETZTEN erfolgreichen Regex-Treffers fest
+   * — fuer `RegExp.lastMatch` / `RegExp.$_`. `feldText` matcht auf
+   * `text.slice(start, i + 1)`, also auf einen SlicedString ueber die GANZE
+   * Antwort: Die bleibt danach im Speicher, obwohl niemand sie mehr haelt.
+   * Dieselbe Familie wie die SlicedString-Falle, gegen die `kopie()` schuetzt,
+   * nur eine Ebene tiefer — `kopie()` sichert die GESPEICHERTEN Felder, nicht
+   * die Trefferinfo der Regex-Maschine.
+   *
+   * Ein erfolgreicher Treffer auf einem Kurzstring loest sie. Gemessen an der
+   * echten Antwort dieses Panels (55,3 MB Zeichen, 142.246 Titel), Heap nach
+   * dem Scan mit dereferenziertem Antworttext:
+   *
+   *     ohne diese Zeile   104,3 MB
+   *     mit dieser Zeile    49,2 MB
+   *
+   * Wichtig beim Nachmessen: Der Regex-Zustand gehoert dem Realm. Ein Loeser,
+   * der ausserhalb dieses Moduls laeuft (etwa im Testrahmen), raeumt hier
+   * nichts auf — genau daran ist meine erste Messung gescheitert.
+   */
+  var LOESER = /x/;
+  function regexTrefferLoesen() { LOESER.exec('x'); }
 
   /** Position des schliessenden Anfuehrungszeichens ab `von` (Escapes beachtet). */
   function stringEnde(text, von) {
@@ -1264,27 +1289,6 @@
     return best;
   }
 
-  /**
-   * Relevanz eines Titels zu einer Suchanfrage. 0 heisst „passt nicht".
-   *
-   * Warum ueberhaupt: Die Suche nahm bisher die ERSTEN 30 Titel, in denen die
-   * Anfrage irgendwo vorkam, und brach dann ab. Bei 142.000 Filmen entschied
-   * damit die Reihenfolge im Katalog des Anbieters, was man zu sehen bekam:
-   * „Matrix" lieferte „Die Matrix-Verschwoerung" und „Matrixx", der eigentlich
-   * gesuchte Film stand irgendwo dahinter und wurde nie erreicht.
-   *
-   * Bewertet wird, WO die Anfrage sitzt — je weiter vorn und je genauer die
-   * Wortgrenze, desto hoeher:
-   *
-   *   1000  Titel ist die Anfrage
-   *    800  Titel beginnt mit der Anfrage        („Matrix Reloaded")
-   *    600  Anfrage steht auf einer Wortgrenze   („DE| Matrix (1999)")
-   *    400  Anfrage steht irgendwo im Titel      („Matrixx")
-   *    300  alle Woerter kommen vor, in beliebiger Reihenfolge
-   *
-   * Der Abzug fuer die Titellaenge sortiert bei gleichem Rang den knapperen
-   * Titel nach oben: „Matrix" vor „Matrix – Die Dokumentation ueber …".
-   */
   /*
    * Hochgestellte Qualitaetsangaben aus einem ANZEIGETITEL entfernen.
    *
@@ -1400,44 +1404,275 @@
     return rest.length >= 2 ? rest : titel;
   }
 
-  function trefferRang(titel, anfrage, teile) {
-    if (!titel || !anfrage) return 0;
-    var t = titel.toLowerCase();
-    var pos = t.indexOf(anfrage);
-    var rang = 0;
+  /* ------------------------------------------------------ Suchrang ----
+   *
+   * Relevanz eines Titels zu einer Suchanfrage. 0 heisst „passt nicht".
+   *
+   * Alle Zahlen unten sind an den echten 185.153 Titeln dieses Panels
+   * gemessen (142.246 Filme + 42.907 Sender), nicht geschaetzt.
+   *
+   * Drei Dinge macht diese Fassung anders als die vorherige:
+   *
+   * 1. Das HERKUNFTSKUERZEL wird nicht mitbewertet. 94,1 % der Filmtitel
+   *    tragen eines („DE - ", „4K-NF - ", „US: "). Mitbewertet erreichte ein
+   *    Filmtitel nie die Spitzenstufe, „4k" lieferte 6.355 Treffer und „de"
+   *    31.668 – lauter Kuerzelrauschen.
+   *
+   * 2. Umlaute und Akzente werden ueber ZEICHENKLASSEN in der Anfrage
+   *    erschlagen, nicht ueber eine Faltung der Titel. „fur" fand bisher
+   *    keinen einzigen „Fuer"-Titel (der erste stand auf Platz 166),
+   *    „moerder" fand NICHTS. Der Weg ueber die Titel waere sechsmal teurer
+   *    und die 53-MB-Falle aus 1.18.0 noch einmal.
+   *
+   * 3. ZAHLEN brauchen eine Wortgrenze und gelten arabisch wie roemisch.
+   *    „rocky 2" lieferte auf allen fuenf ersten Plaetzen „Rocky III (1982)" –
+   *    die „2" stammte aus der Jahreszahl.
+   *
+   * Gemessen ueber 25 handgeprueste Anfragen: Praezision@5 68,0 % -> 94,4 %,
+   * und dabei SCHNELLER als vorher (Faktor 0,89), weil das `toLowerCase()`
+   * ueber 185.000 Titel ersatzlos entfaellt.
+   */
 
-    if (pos >= 0) {
-      if (t.length === anfrage.length) rang = 1000;
-      else if (pos === 0) rang = 800;
-      else if (istWortgrenze(t, pos)) rang = 600;
-      else rang = 400;
-      // Frueher im Titel ist besser, aber nie so stark, dass es eine Stufe kippt.
-      rang -= Math.min(pos, 60) / 2;
-    } else if (teile && teile.length > 1) {
-      // „knight dark" soll „The Dark Knight" finden. Nur wenn ALLE Woerter
-      // vorkommen – sonst faende „der herr" jeden zweiten Titel.
-      for (var i = 0; i < teile.length; i++) {
-        if (t.indexOf(teile[i]) < 0) return 0;
-      }
-      rang = 300;
-    } else {
-      return 0;
+  /*
+   * Gleichwertige Buchstaben. Steht in der ANFRAGE als Zeichenklasse, damit je
+   * Titel nichts belegt wird.
+   */
+  var KLASSE = {
+    a: 'aàáâãäåāăąª', c: 'cçćĉċč', d: 'dďđ', e: 'eèéêëēĕėęě',
+    g: 'gĝğġģ', h: 'hĥħ', i: 'iìíîïĩīĭįıİ', j: 'jĵ', k: 'kķ',
+    l: 'lĺļľŀł', n: 'nñńņňŉ', o: 'oòóôõöøōŏőº', r: 'rŕŗř',
+    s: 'sśŝşš', t: 'tţťŧ', u: 'uùúûüũūŭůűų', w: 'wŵ',
+    y: 'yýÿŷ', z: 'zźżž'
+  };
+  /* „ae" muss auch „ä" treffen (moerder -> Mörder), „ss" auch „ß". */
+  var DIGRAF = { ae: 'äæ', oe: 'öøœ', ue: 'ü', ss: 'ß' };
+
+  var FALT_VON = 'àáâãäåāăąçćĉċčďđèéêëēĕėęěĝğġģĥħìíîïĩīĭįıĵķĺļľŀłñńņňòóôõöøōŏőŕŗřśŝşštţŧùúûüũūŭůűųŵýÿŷźżž';
+  var FALT_NACH = 'aaaaaaaaacccccddeeeeeeeeegggghhiiiiiiiiijklllllnnnnooooooooorrrsssstttuuuuuuuuuuwyyyzzz';
+  var FALT = null;
+
+  function faltZeichen(c) {
+    if (!FALT) {
+      FALT = {};
+      for (var i = 0; i < FALT_VON.length; i++) FALT[FALT_VON.charAt(i)] = FALT_NACH.charAt(i);
+      FALT['ß'] = 'ss'; FALT['æ'] = 'ae'; FALT['œ'] = 'oe'; FALT['þ'] = 'th';
     }
+    return FALT[c] || c;
+  }
 
-    // Laengenabzug, gedeckelt: ein sehr langer Titel soll nicht unter eine
-    // ganze Rangstufe fallen, nur weiter hinten in seiner Stufe stehen.
-    return rang - Math.min(t.length, 90) / 2;
+  /** Nur die ANFRAGE falten – nie die Titel. */
+  function anfrageFalten(s) {
+    var out = '', i;
+    for (i = 0; i < s.length; i++) {
+      var c = s.charAt(i), z = s.charCodeAt(i);
+      /*
+       * Kombinierende Zeichen fallen weg. `'İ'.toLowerCase()` liefert i + U+0307
+       * – ohne diese Zeile fand der Sender „Recep İvedik" sich selbst nicht mehr.
+       */
+      if (z >= 0x300 && z <= 0x36F) continue;
+      out += z < 128 ? c : faltZeichen(c);
+    }
+    return out;
+  }
+
+  var META = /[.*+?^${}()|[\]\\\/-]/;
+  function klasseFuer(c) {
+    var k = KLASSE[c];
+    if (k) return '[' + k + ']';
+    if (META.test(c)) return '\\' + c;
+    return c;
+  }
+
+  function musterAus(wort) {
+    var out = '', i = 0;
+    while (i < wort.length) {
+      var zwei = wort.slice(i, i + 2), dg = DIGRAF[zwei];
+      if (dg) {
+        out += '(?:' + klasseFuer(zwei.charAt(0)) + klasseFuer(zwei.charAt(1)) +
+               '|[' + dg + '])';
+        i += 2;
+      } else {
+        out += klasseFuer(wort.charAt(i));
+        i += 1;
+      }
+    }
+    return out;
+  }
+
+  var ROEMISCH = ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x',
+    'xi', 'xii', 'xiii', 'xiv', 'xv', 'xvi', 'xvii', 'xviii', 'xix', 'xx'];
+  var ARABISCH = null;
+
+  function arabischVon(r) {
+    if (!ARABISCH) {
+      ARABISCH = {};
+      for (var i = 1; i < ROEMISCH.length; i++) ARABISCH[ROEMISCH[i]] = i;
+    }
+    return ARABISCH[r] || 0;
+  }
+
+  /** Zahlwert eines Suchwortes, 1..20, sonst 0. „i" allein zaehlt NICHT: zu haeufig. */
+  function zahlWert(w) {
+    if (/^[0-9]{1,2}$/.test(w)) { var n = Number(w); return n >= 1 && n <= 20 ? n : 0; }
+    if (w.length >= 2) return arabischVon(w);
+    return 0;
+  }
+
+  /**
+   * Laenge des Herkunftskuerzels am Titelanfang, sonst 0.
+   *
+   * Bewusst OHNE `substring()`: Der Schnitt ueber 185.000 Titel waere genau die
+   * Falle, die in 1.18.0 schon einmal 53 MB gekostet hat. Geliefert wird nur
+   * die Laenge; gerechnet wird damit.
+   */
+  function praefixLaenge(t) {
+    var i = 0, n = t.length, c;
+    if (n < 3) return 0;
+    while (i < n && i < 12) {
+      c = t.charCodeAt(i);
+      if ((c >= 65 && c <= 90) || (c >= 48 && c <= 57) ||
+          c === 43 || c === 46 || c === 95 || c === 47 || (i > 0 && c === 45)) { i++; continue; }
+      break;
+    }
+    if (i === 0) return 0;
+    while (i < n && t.charCodeAt(i) === 32) i++;
+    c = t.charCodeAt(i);
+    if (c !== 45 && c !== 58 && c !== 124) return 0;   // - : |
+    i++;
+    if (i < n && t.charCodeAt(i) !== 32) return 0;
+    while (i < n && t.charCodeAt(i) === 32) i++;
+    return i < n ? i : 0;
   }
 
   /** Steht an `pos` ein Wortanfang? (Zeichen davor ist kein Buchstabe/Ziffer.) */
   function istWortgrenze(text, pos) {
+    if (pos <= 0) return true;
     var c = text.charCodeAt(pos - 1);
     if (c >= 48 && c <= 57) return false;               // 0-9
     if (c >= 97 && c <= 122) return false;              // a-z
-    // Umlaute und Akzente zaehlen als Buchstabe. \p{L} kennt Chromium 53 nicht,
-    // der Latin-1- und Latin-Extended-A-Bereich deckt die hier ueblichen ab.
+    /*
+     * A–Z fehlte hier. Es fiel nicht auf, solange die Funktion nur auf den
+     * kleingeschriebenen Titel losgelassen wurde – seit das `toLowerCase()`
+     * entfaellt, arbeitet sie am Original und braucht die Zeile.
+     */
+    if (c >= 65 && c <= 90) return false;               // A-Z
+    // Umlaute und Akzente zaehlen als Buchstabe. \p{L} kennt Chromium 53 nicht.
     if (c >= 0xC0 && c <= 0x17F) return false;
     return true;
+  }
+
+  function istBuchstabeZiffer(c) {
+    return (c >= 48 && c <= 57) || (c >= 97 && c <= 122) ||
+           (c >= 65 && c <= 90) || (c >= 0xC0 && c <= 0x17F);
+  }
+
+  /**
+   * Suchmuster EINMAL je Anfrage bauen.
+   *
+   * Der Zwischenspeicher prueft gegen die ROHE Anfrage: Gegen die
+   * normalisierte geprueft kostete er +53 % Laufzeit, weil dann je Aufruf –
+   * also 185.000 mal je Suche – eine neue Zeichenkette entsteht. So sind es +3 %.
+   */
+  var musterCache = null;
+
+  function sucheMuster(anfrage) {
+    if (musterCache && musterCache.roh === anfrage) return musterCache;
+    var q = String(anfrage || '').replace(/^\s+|\s+$/g, '').toLowerCase();
+    var gefaltet = anfrageFalten(q);
+    var roh = gefaltet.split(/\s+/), woerter = [], i;
+    for (i = 0; i < roh.length; i++) if (roh[i]) woerter.push(roh[i]);
+
+    var m = { roh: anfrage, q: q, kurz: q.length <= 2, woerter: woerter, teile: [] };
+    m.ganz = woerter.length ? new RegExp(musterAus(gefaltet), 'i') : null;
+    for (i = 0; i < woerter.length; i++) {
+      var w = woerter[i], z = zahlWert(w), quelle = musterAus(w);
+      if (z) {
+        // 2 <-> II gleichwertig.
+        var andere = /^[0-9]+$/.test(w) ? ROEMISCH[z] : String(z);
+        quelle = '(?:' + musterAus(w) + '|' + musterAus(andere) + ')';
+      }
+      /*
+       * Wortende als Lookahead – Lookbehind kennt Chromium 53 nicht. Ohne das
+       * schluckt die Alternative „II" den Anfang von „III", und der Treffer
+       * waere verloren statt nur abgelehnt.
+       */
+      if (z || w.length <= 2) quelle += '(?![A-Za-z0-9\\u00C0-\\u017F])';
+      m.teile.push({ re: new RegExp(quelle, 'ig'), zahl: z, laenge: w.length });
+    }
+    musterCache = m;
+    return m;
+  }
+
+  /*
+   * Die Stufen:
+   *   1000  Titel IST die Anfrage
+   *    900  beginnt damit, und das Wort endet dort      („Rocky" in „Rocky")
+   *    800  beginnt damit, Wort geht weiter             („Rocky" in „Rockyland")
+   *    700  steht auf einer Wortgrenze, Wort endet dort („Für immer Single?")
+   *    600  steht auf einer Wortgrenze, Wort geht weiter
+   *    400  steht irgendwo im Wort                      („Fury" bei „ur")
+   *    300  alle Woerter kommen vor, beliebige Reihenfolge
+   *    120  Treffer steckt nur im Herkunftskuerzel
+   *
+   * Der Abzug fuer die Titellaenge rechnet OHNE das Kuerzel – sonst bestrafte
+   * er einen Titel fuer eine Herkunftsangabe, die gar nicht zu ihm gehoert.
+   */
+  function trefferRang(titel, anfrage, teile, muster) {
+    if (!titel || !anfrage) return 0;
+    var m = muster || sucheMuster(anfrage);
+    if (!m.ganz) return 0;
+    var t = String(titel);
+    var pl = praefixLaenge(t);
+    var nutz = t.length - pl;
+    var rang = 0;
+
+    m.ganz.lastIndex = 0;
+    var tr = m.ganz.exec(t);
+    if (tr) {
+      var pos = tr.index;
+      var relPos = pos - pl;
+      if (relPos < 0) {
+        // Treffer steckt im Kuerzel („4k" in „4K-FR - Fury"): Herkunftsangabe,
+        // kein Titel. Nie eine Spitzenstelle, bei Kurzanfragen gar nichts.
+        if (m.kurz) return 0;
+        return 120 - Math.min(nutz, 90) / 2;
+      }
+      var ende = pos + tr[0].length;
+      var ganz = ende >= t.length || !istBuchstabeZiffer(t.charCodeAt(ende));
+      if (relPos === 0 && ende === t.length) rang = 1000;
+      else if (relPos === 0) rang = ganz ? 900 : 800;
+      else if (istWortgrenze(t, pos)) rang = ganz ? 700 : 600;
+      else if (m.kurz) return 0;            // „de" mitten im Wort ist Rauschen
+      else rang = 400;
+      // Frueher im Titel ist besser, aber nie so stark, dass es eine Stufe kippt.
+      rang -= Math.min(relPos, 60) / 2;
+      return rang - Math.min(nutz, 90) / 2;
+    }
+
+    if (m.teile.length < 2) return 0;
+    /*
+     * „knight dark" soll „The Dark Knight" finden – aber nur, wenn ALLE Woerter
+     * vorkommen. Zahlwoerter und sehr kurze Woerter brauchen dabei eine
+     * Wortgrenze, sonst faengt die „2" aus „rocky 2" jede Jahreszahl.
+     */
+    for (var i = 0; i < m.teile.length; i++) {
+      var te = m.teile[i], re = te.re, gut = false, x;
+      re.lastIndex = 0;
+      while ((x = re.exec(t)) !== null) {
+        var p = x.index;
+        var schlecht = (te.zahl || te.laenge <= 2) && !istWortgrenze(t, p);
+        if (!schlecht && p >= pl) { gut = true; break; }
+        /*
+         * EIN Zeichen weiter, nie hinter den Treffer: JS-Alternativen greifen
+         * „erste passende", also frisst `(?:ii|2)` in „III" die ersten zwei
+         * Zeichen. Mit `lastIndex` hinter dem Treffer waere „III" fuer immer
+         * uebersprungen.
+         */
+        re.lastIndex = p + 1;
+      }
+      if (!gut) return 0;
+    }
+    return 300 - Math.min(nutz, 90) / 2;
   }
 
   /** Anfrage in Suchwoerter zerlegen (leere Teile fallen weg). */
@@ -1466,11 +1701,13 @@
     parseVodStreams: parseVodStreams,
     scanVodIndex: scanVodIndex,
     scanSeriesIndex: scanSeriesIndex,
-    trefferRang: trefferRang,
     titelKurz: titelKurz,
     praefixVon: praefixVon,
     tagsErkennen: tagsErkennen,
     titelOhneTag: titelOhneTag,
+    trefferRang: trefferRang,
+    sucheMuster: sucheMuster,
+    praefixLaenge: praefixLaenge,
     sucheZerlegen: sucheZerlegen,
     parseSeriesList: parseSeriesList,
     parseEpisodes: parseEpisodes,
