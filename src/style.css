@@ -548,9 +548,16 @@ main::-webkit-scrollbar { width: 0; }
 
 .detail-head { position: relative; margin-bottom: 24px; }
 .detail-backdrop {
-  position: relative; width: 100%; height: 0; padding-top: 32%;
+  /* 32 % -> 42 %: Das Bild traegt jetzt Titel und Metazeile und braucht die
+     Hoehe. Der Verlauf blendet es nach unten in den Seitengrund. */
+  position: relative; width: 100%; height: 0; padding-top: 42%;
   overflow: hidden; border-radius: 20px;
   background: rgba(255, 255, 255, 0.12); background: var(--surface-strong);
+}
+
+/* Textbuehne im Bild – der Verlauf des Scrims traegt sie. */
+.detail-textbox {
+  position: absolute; left: 40px; right: 40px; bottom: 24px; z-index: 2;
 }
 .detail-backdrop img {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
@@ -563,10 +570,13 @@ main::-webkit-scrollbar { width: 0; }
 .detail-backdrop .scrim {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0;
 }
-.detail-title { font-size: 56px; font-weight: 800; margin: 20px 0 12px;
+.detail-title {
+  font-size: 56px; font-weight: 800; margin: 0 0 8px;
   line-height: 1.15;
   /* Grosse Schrift laeuft von Natur aus zu weit – enger stellen. */
   letter-spacing: -0.015em;
+  /* Der Verlauf reicht auf hellen Bildern nicht immer: Ein weicher Schatten
+     haelt den Titel auch ueber einem hellen Himmel lesbar. */
 }
 .detail-meta { font-size: 22px; color: #a9a4bd; color: var(--text-dim); margin-bottom: 16px;
   line-height: 1.45;
@@ -988,4 +998,13 @@ body.ruhig .spinner {
   -webkit-transition-duration: 120ms; transition-duration: 120ms;
   -webkit-transition-timing-function: var(--kurve-ein);
           transition-timing-function: var(--kurve-ein);
+}
+
+
+/* Metazeile auf der Bildbuehne – heller als der Fliesstext darunter. */
+.detail-textbox .detail-meta {
+  /* Folgt dem Design: Eine fest helle Schrift verschwand auf hellem Grund –
+     der Verlauf deckt unter dem Text ohnehin fast vollstaendig. */
+  color: #5a5670; color: var(--text-dim);
+  margin: 0;
 }

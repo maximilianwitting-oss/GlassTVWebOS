@@ -2,6 +2,34 @@
 
 ## 1.17.0
 
+**Detailseite: Das Bild ist jetzt die Bühne.** Vorher endete das Backdrop mit
+einer harten Kante, Titel und Metazeile standen darunter — das Bild wirkte wie
+eine Briefmarke, und unterhalb blieb kaum Platz (der Abspiel-Knopf lag bei 959
+von 1080 px). Jetzt liegen Titel und Metazeile im Bild, getragen von einem
+Verlauf, der in den Seitengrund blendet. Auf hellen wie dunklen Backdrops
+geprüft.
+
+**Marken statt Textballast.** 4K, HD und Dolby werden aus dem Titel gelesen und
+als Marke ins Poster gesetzt — auch in den hochgestellten Unicode-Varianten
+(„⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ"), die IPTV-Playlisten verwenden. Höchstens zwei je Eintrag.
+„LIVE" ist die einzige gesättigte Fläche der Oberfläche.
+
+**Bewegung** mit drei Kurven und zwei Dauern, ausgerichtet an der
+Tastenwiederholung der Fernbedienung: 160 ms herein, 110 ms hinaus. Der
+Fokusring selbst erscheint in 0 ms — die Ortsangabe darf nicht nachlaufen.
+Karten skalieren nicht mehr, sondern heben ab, während das Poster innen zoomt.
+Neu ist ein Gedrückt-Zustand; Enter über die Fernbedienung löst kein `:active`
+aus, es gab also bisher gar keine Rückmeldung auf einen Tastendruck.
+
+**Scrollen beim Öffnen.** Die Detailseite sprang um 65 px hoch, wodurch der
+obere Bildrand samt Zurück-Knopf hinter der Kopfleiste verschwand. Ursache war
+der großzügige Komfortrand von `revealFocus`: Er zog den Blick auch dann zum
+Ziel, wenn dieses längst sichtbar war. Beim Erstaufbau und beim bloßen
+Neuzeichnen wird jetzt nur noch gescrollt, wenn das Element wirklich außerhalb
+liegt.
+
+## 1.17.0
+
 **Liquid Glass — ohne `backdrop-filter`.** Der klassische Glas-Effekt braucht
 `backdrop-filter`, das es erst ab Chrome 76 gibt; webOS 4 hat Chromium 53.
 Ersatz ist `background-attachment: fixed`: Der Hintergrund wird am Viewport

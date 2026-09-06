@@ -231,7 +231,9 @@
       inContent.push(focusables[i]);
     }
     var target = erstziel || (inContent.length ? inContent[0] : (ersteEingabe || focusables[0]));
-    if (target) { target.focus(); revealFocus(target); }
+    // Sanft: Beim Erstaufbau soll die Seite so stehen bleiben, wie sie gebaut
+    // wurde – der Nutzer hat sie gerade erst geoeffnet.
+    if (target) { target.focus(); revealFocus(target, true); }
   }
 
   /**
@@ -273,7 +275,17 @@
    * Rand. Deshalb wird hier von Hand nur so weit gescrollt, wie nötig: die
    * Chip-Reihe waagerecht, die Seite senkrecht.
    */
-  function revealFocus(node) {
+  /**
+   * Fokussiertes Element in den Blick holen.
+   *
+   * `sanft` scrollt nur, wenn das Element wirklich ausserhalb liegt – ohne
+   * Komfortrand. Beim ERSTEN Aufbau einer Seite zog der grosszuegige Rand
+   * sonst den Inhalt hoch, obwohl das Ziel bereits sichtbar war: Auf der
+   * Detailseite verschwand dadurch der obere Bildrand samt Zurueck-Knopf
+   * hinter der Kopfleiste.
+   */
+  function revealFocus(node, sanft) {
+    var rand = sanft ? 0 : 90;
     var box = node.getBoundingClientRect();
 
     var row = scrollParent(node, true);
@@ -289,8 +301,8 @@
       box = node.getBoundingClientRect();
       // Großzügiger Rand: Auf dem Fernseher soll das fokussierte Element nie
       // an der Kante kleben, sonst sieht man den Kontext nicht mehr.
-      if (box.top < cb.top + 90) col.scrollTop -= (cb.top + 90 - box.top);
-      else if (box.bottom > cb.bottom - 90) col.scrollTop += (box.bottom - cb.bottom + 90);
+      if (box.top < cb.top + rand) col.scrollTop -= (cb.top + rand - box.top);
+      else if (box.bottom > cb.bottom - rand) col.scrollTop += (box.bottom - cb.bottom + rand);
     }
   }
 
@@ -495,7 +507,13 @@
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].getAttribute('data-fkey') === key) {
         nodes[i].focus();
-        revealFocus(nodes[i]);
+        /*
+         * Sanft: Beim Wiederherstellen hat der Nutzer nicht navigiert, die
+         * Seite wurde nur neu gezeichnet. Mit vollem Komfortrand sprang sie
+         * dabei – auf der Detailseite schob der nachgeladene Beschreibungstext
+         * den Aufbau nach, und der Rand zog den Blick vom Bild weg.
+         */
+        revealFocus(nodes[i], true);
         return true;
       }
     }
@@ -1090,7 +1108,8 @@
     var scrims = document.querySelectorAll('.detail-backdrop .scrim');
     for (var i = 0; i < scrims.length; i++) {
       scrims[i].style.background =
-        'linear-gradient(to bottom, rgba(' + base + ',0) 30%, rgba(' + base + ',0.95) 100%)';
+        'linear-gradient(to bottom, rgba(' + base + ',0) 20%, rgba(' + base + ',0.35) 45%,' +
+      'rgba(' + base + ',0.88) 68%, rgba(' + base + ',0.99) 84%, rgba(' + base + ',1) 100%)';
     }
   }
 
@@ -1748,6 +1767,8 @@
 
   // ----------------------------------------------------------- Seiten ----
 
+  var letzteAnsicht = undefined;
+
   function render() {
     rememberFocus();
     renderTabs();
@@ -1785,7 +1806,25 @@
     else renderFavorites();
 
     lazyAnstossen();
-    setTimeout(function () { if (!restoreFocus()) ensureFocus(); }, 0);
+    /*
+     * Eine neu geoeffnete Ansicht beginnt oben. Ohne das sprang die Seite in
+     * den ersten Millisekunden: Solange das Backdrop-Bild noch nicht geladen
+     * ist, stehen die Elemente woanders, und der Erstfokus scrollte zu einer
+     * Position, die nach dem Bildaufbau nicht mehr stimmte – auf der
+     * Detailseite verschwand dadurch der obere Bildrand hinter der Kopfleiste.
+     */
+    var neueAnsicht = state.view !== letzteAnsicht;
+    letzteAnsicht = state.view;
+    setTimeout(function () {
+      if (!restoreFocus()) ensureFocus();
+      /*
+       * NACH dem Fokus zuruecksetzen: Der Fokus selbst scrollt (revealFocus),
+       * und eine frisch geoeffnete Ansicht soll oben beginnen. Vorher sprang
+       * die Detailseite um 65px hoch, wodurch der obere Bildrand samt
+       * Zurueck-Knopf hinter der Kopfleiste verschwand.
+       */
+      if (neueAnsicht && el.content.scrollTop) el.content.scrollTop = 0;
+    }, 0);
     // Zweiter Anlauf: Beim ersten Aufbau sind Bilder/Layout noch nicht fertig,
     // ein Fokus auf ein Element der Größe null greift nicht.
     setTimeout(ensureFocus, 350);
@@ -2405,11 +2444,22 @@
     var rgb = hexToRgba(d.bg, 1).replace('rgba(', '').replace(')', '').split(',');
     var base = rgb[0] + ',' + rgb[1] + ',' + rgb[2];
     scrim.style.background =
-      'linear-gradient(to bottom, rgba(' + base + ',0) 30%, rgba(' + base + ',0.95) 100%)';
+      'linear-gradient(to bottom, rgba(' + base + ',0) 24%, rgba(' + base + ',0.55) 58%,' +
+      'rgba(' + base + ',0.92) 82%, rgba(' + base + ',1) 100%)';
     bd.appendChild(scrim);
+
+    /*
+     * Titel und Metazeile liegen IM Bild, getragen vom Verlauf. Vorher endete
+     * das Backdrop mit einer harten Kante und der Titel stand darunter – das
+     * Bild wirkte wie eine Briefmarke, und unterhalb blieb kaum Platz fuer
+     * Beschreibung und Aktionen (der Abspiel-Knopf lag bei 959 von 1080 px).
+     */
+    var textbox = element('div', 'detail-textbox');
+    textbox.appendChild(element('h2', 'detail-title', title));
+    if (metaText) textbox.appendChild(element('div', 'detail-meta', metaText));
+    bd.appendChild(textbox);
+
     head.appendChild(bd);
-    head.appendChild(element('div', 'detail-title', title));
-    if (metaText) head.appendChild(element('div', 'detail-meta', metaText));
     return head;
   }
 
