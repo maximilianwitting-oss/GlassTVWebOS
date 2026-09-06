@@ -1,5 +1,128 @@
 # Änderungen
 
+## 1.20.0
+
+Diese Runde beruht auf drei Prüfberichten. Zwei Verdachtsfälle wurden dabei am
+Gerät **widerlegt** — sie stehen mit drin, weil ein widerlegter Verdacht so viel
+wert ist wie ein bestätigter.
+
+### Bildrate: gemessen, nicht vermutet
+
+**Die Fokusbewegung vermaß bei jedem Tastendruck jedes Element.** Auf dem Gerät
+gemessen, bei 823 fokussierbaren Elementen: `collectFocusables` 2,0 ms,
+Rechtecke 9,8 ms, `scrollParent` je Kandidat 14,0 ms — zusammen **29,9 ms je
+Tastendruck**, Median **12 fps**, 68 % aller Bilder über 33 ms. In einer
+einspaltigen Liste ist der senkrechte Nachbar aber immer das Geschwisterelement:
+zwei Messungen statt 1.600. Gemessen **4,4 ms statt 30 ms**. Im Poster-Raster
+greift der schnelle Weg bewusst nicht — dort fällt die Nachbarkachel durch die
+Deckungsprüfung, und der allgemeine Weg übernimmt.
+
+**Die Poster wurden in voller Größe geladen.** `bildAdresse` ersetzte
+`/t/p/original/` und `/t/p/wNNN/` — die Poster dieser Quelle kommen aber als
+`/t/p/w600_and_h900_bestv2/`, mit Unterstrich statt Schrägstrich. Der Ausdruck
+griff nie, und auf einer 232-px-Kachel landete ein 600×900-Bild. A/B am Gerät,
+61 Poster gleichzeitig über Netz:
+
+| | größte Bildlücke | Blockaden > 33 ms | alle geladen nach |
+|---|---|---|---|
+| vorher | 467 ms | 934 ms | 1892 ms |
+| nachher | **250 ms** | **500 ms** | **1430 ms** |
+
+Das waren die größten Einzelblockaden der ganzen Oberfläche.
+
+**`position: relative` stand im `:focus`-Zustand** — eine *Layout*-Eigenschaft.
+Bei jedem Tastendruck brach der Browser deshalb zweimal um (verlassenes und
+neues Element), rund zwanzigmal je Sekunde. `.tab`, `.chip` und `.channel`
+trugen sie ohnehin im Grundzustand; ausgerechnet Karte, Knopf und Profil nicht.
+
+**`revealFocus` und der Lazy-Loader lasen und schrieben abwechselnd.** Jeder
+Schreibzugriff macht das Layout ungültig, jede folgende Messung erzwingt es neu
+— zwei Umbrüche statt einem beim Fokus, bis zu 120 statt einem beim Nachladen
+der Logos. Beide arbeiten jetzt in zwei Durchläufen. Die Drossel des Lazy-Loaders
+lief außerdem auf der Vorderflanke: Der teure Durchlauf fiel mitten in die
+gehaltene Taste statt danach.
+
+**Der EPG-Takt warf jede Minute die ganze Ansicht weg.** Gemessen: 76 ms
+Rechenzeit, ~450 ms Stillstand — und die Liste fiel von 360 nachgeladenen Zeilen
+auf 120 zurück, `scrollTop` auf 0, der Fokus an den Listenanfang. Wer sich in
+die Senderliste hinuntergearbeitet hatte, wurde **jede Minute an den Anfang
+geworfen**. Jetzt werden die sichtbaren Zeilen fortgeschrieben.
+
+Dazu: Blockgröße 120 → 40 Zeilen (gemessen 128 ms Rechenzeit und ~317 ms
+Stillstand je Nachladen), und `main` bekommt eine eigene Compositor-Ebene —
+beim reinen Bildlauf 20 → 51 fps, beim tastenweisen Springen bleibt der Median
+gleich, die Ausreißer über 100 ms halbieren sich.
+
+### Zwei widerlegte Verdachtsfälle
+
+**`background-attachment: fixed` auf der Kopfleiste** stand im Verdacht, den
+Bildlauf auf den Hauptthread zu zwingen. Vier unabhängige Messungen mit
+A/B/A/B-Wechsel: kein Unterschied. Der Umbau wäre umsonst gewesen.
+
+**Der SlicedString-Verdacht im XMLTV-Scanner** (Vorrunde) kostete 280 → 283 MB,
+also nichts. Der wahre Posten waren 53 MB durch ein `toLowerCase()` über 42.000
+Sender-Kennungen.
+
+### Aussehen
+
+**Titel waren mit Zeichenmüll durchsetzt.** „4K: ELEVEN SPORTS ᴾᴸ ᵁᴴᴰ ³⁸⁴⁰ᴾ" —
+bei 22 px Grundgröße sind diese Glyphen rund 11 px hoch, auf drei Metern unter
+der Auflösungsgrenze, und sie fressen genau die Breite, in der der echte Name
+abgeschnitten wird. Betroffen: **27.900 von 42.907 Sendern**. Gelesen werden die
+Angaben weiterhin — als lesbare 4K/HD/Dolby-Marken.
+
+**Jede Filmkachel begann mit „TOP - ".** Ein gelernter statt geratener Erkenner
+kürzt **26.328 Sendernamen** und in den geprüften Filmkategorien 100 % — und
+lässt „IT: Chapter Two" oder „M: Eine Stadt sucht einen Mörder" in Ruhe, weil
+dort kein Kürzel die Liste anführt. Über die ganze Bibliothek gerechnet findet
+er bewusst *nichts*; die richtige Ebene ist die Gruppe.
+
+**697 Rautenzeilen** wie `##### 4K ᵁᴴᴰ #####` sind Gruppentrenner des Anbieters,
+keine Sender — anwählbar waren sie trotzdem, und eine stand als Zeile 1 ganz
+oben. Die Regel ist eng gehalten (Rauten an beiden Enden) und trifft gegen die
+echten 42.907 Namen genau die 697.
+
+**Die Detailseite war arithmetisch überfüllt:** 130 + 8 + 79 + 753 + 24 = 994 px
+— dort begann erst die Knopfzeile, ihre Unterkante lag bei 1057 von 1080, und
+die Inhaltsangabe bei y=1073, also außerhalb des Bildes. Backdrop jetzt 34 %
+statt 42 %.
+
+**Das Suchfeld hatte überhaupt keine Gestaltung** — für `.search` und
+`.search-wrap` existierte keine einzige CSS-Regel, es griff nur
+`input { width: 100% }`.
+
+**Alle Flächen waren dieselbe Fläche.** Karte, Senderzeile, Chip, Tab und Panel:
+gleiche Farbe, gleicher Rand, gleicher Radius. Auf hellen Designs zeigte das
+Material sogar falsch herum — die Fläche war *dunkler* als der Grund (1,11:1,
+liest sich als Vertiefung) und trug gleichzeitig einen Schlagschatten. Jetzt
+zwei Rangstufen; die Kartenkontur steigt von 1,66:1 auf 2,10:1.
+
+Dazu: Die LIVE-Pille erreichte auf hellen Designs 3,27:1 (jetzt 4,81:1), bei
+`.detail-title` versprach ein Kommentar einen Schatten, den die Regel nicht
+enthielt, und zwei Knöpfe ohne Hauptgeste trugen die Akzentfarbe.
+
+### Bewegung
+
+Der Gedrückt-Zustand — laut Kommentar „die einzige sofortige Rückmeldung auf
+einen Tastendruck" — war **außer auf Karten unsichtbar**: `.focusable.gedrueckt`
+(Spezifität 0,2,0) verlor gegen `.chip.focusable:focus` (0,3,0). Der Ring
+wechselte, die Bewegung nicht.
+
+Die Ausgangsbewegung existierte für fast nichts: Die `transition` stand nur auf
+`:focus`, verschwand beim Verlassen also gleichzeitig mit dem `transform`. Die
+dokumentierte Asymmetrie „schnell herein, schneller hinaus" galt nur für die
+Karte.
+
+Fokusdauer 160 → 90 ms: Bei 100–130 ms Tastenwiederholung lief bisher **kein**
+Fokusübergang je zu Ende. Neu ist ein Eilig-Zustand, der beim Durchscrollen das
+Zierwerk aussetzt und 220 ms nach dem letzten Tastendruck zurückkommt.
+
+`#content.wechsel` und `body.ruhig` wurden **nirgends gesetzt** — zwei CSS-Blöcke,
+die Bewegung versprachen und nie liefen. Der Ansichtswechsel ist jetzt verkabelt
+(nur bei echtem Wechsel, sonst blinkte der Bildschirm im Minutentakt), `ruhig`
+und das auf Chromium 53 unbekannte `prefers-reduced-motion` sind entfernt.
+
+
 ## 1.19.0
 
 **Zurückschauen (Catch-up).** `tv_archive_duration` kam von jedem Panel mit und

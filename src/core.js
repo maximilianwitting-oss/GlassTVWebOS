@@ -243,7 +243,7 @@
           id: itemID, title: name, posterURL: logo, group: group, streamURL: line,
           year: yearMatch ? yearMatch[0].replace(/[()]/g, '') : null, sourceID: sourceID,
         });
-      } else {
+      } else if (!istTrennzeile(name)) {   // Gruppentrenner sind keine Sender
         result.channels.push({
           id: itemID, name: name, logoURL: logo, group: group,
           streamURL: line, epgID: epgID, sourceID: sourceID,
@@ -546,6 +546,24 @@
     return out;
   }
 
+  /**
+   * Trennzeile einer Playlist erkennen (`##### 4K ᵁᴴᴰ #####`).
+   *
+   * Anbieter stellen solche Zeilen als optische Gruppentrenner in ihre Liste.
+   * Sie sind keine Sender: Wer sie anwaehlt, bekommt einen schwarzen
+   * Bildschirm. Die App zeichnete sie als ganz normale, anwaehlbare Zeile –
+   * auf diesem Panel 697 Stueck, und ausgerechnet eine davon stand als Zeile 1
+   * ganz oben in der Senderliste.
+   *
+   * Bewusst eng: Rauten an BEIDEN Enden. Gegen die echten 42.907 Namen
+   * geprueft trifft das genau die 697 Trenner – und keinen einzigen Sender,
+   * der nur an einem Ende Rauten traegt (davon gibt es keinen).
+   */
+  function istTrennzeile(name) {
+    var t = String(name || '').replace(/^\s+|\s+$/g, '');
+    return /^#{3,}[\s\S]*#{3,}$/.test(t);
+  }
+
   function parseLiveStreams(json, categories, host, user, pass, sourceID) {
     var out = [];
     if (!json || !json.length) return out;
@@ -554,6 +572,7 @@
       if (!s || typeof s !== 'object') continue;   // ein null kippte sonst den Import
       var id = num(s.stream_id);
       if (id === null) continue;
+      if (istTrennzeile(s.name)) continue;      // Gruppentrenner, kein Sender
       out.push({
         // Kennung aus der Stream-Nummer: kurz, stabil und ohne Zugangsdaten.
         id: sourceID + '|l|' + id,
@@ -1254,6 +1273,99 @@
    * Der Abzug fuer die Titellaenge sortiert bei gleichem Rang den knapperen
    * Titel nach oben: „Matrix" vor „Matrix – Die Dokumentation ueber …".
    */
+  /*
+   * Hochgestellte Qualitaetsangaben aus einem ANZEIGETITEL entfernen.
+   *
+   * IPTV-Playlisten haengen „ᵁᴴᴰ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ" an fast jeden Namen –
+   * auf diesem Panel an 27.900 von 42.907 Sendern. Bei 22 px Grundgroesse
+   * sind diese Glyphen rund 11 px hoch: auf drei Metern unter der
+   * Aufloesungsgrenze, also reine Stoerung. Schlimmer noch, sie verbrauchen
+   * genau die Breite, in der `text-overflow: ellipsis` anschliessend den
+   * echten Namen abschneidet, und in mancher Ersatzschrift erscheinen sie als
+   * leere Kaestchen.
+   *
+   * Gelesen werden die Angaben weiterhin: `markenAusTitel` bekommt das
+   * ORIGINAL und macht daraus die lesbaren 4K/HD/Dolby-Marken. Gekuerzt wird
+   * ausschliesslich fuer die Anzeige – Suche, Sortierung und Kennungen
+   * arbeiten unveraendert mit dem vollen Namen.
+   *
+   * Bereiche: U+02B0–02FF Modifikatorbuchstaben, U+1D2C–1DBF phonetische
+   * Erweiterungen, U+2070–209F Hoch-/Tiefstellungen, U+2C7C/2C7D sowie die
+   * drei Altlasten ¹²³ aus Latin-1. `{2,}`: nur Ketten, nie ein Einzelzeichen
+   * – ein alleinstehendes U+02BC ist in echten Titeln ein Apostroph
+   * („Hawaiʻi") und muss stehen bleiben.
+   */
+  var HOCHGESTELLT =
+    /[²³¹ʰ-˿ᴬ-ᶿ⁰-₟ⱼⱽ]{2,}/g;
+  var QUALITAET_ENDE =
+    /[\s|:·\-]*\b(?:4K|UHD|FHD|HD|SD|2160P?|1080P?|720P?|DOLBY(?:\s+(?:AUDIO|VISION|ATMOS))?|ATMOS|VISION)\b[\s|:·\-]*$/i;
+
+  function titelKurz(titel) {
+    var roh = String(titel || '');
+    var t = roh.replace(HOCHGESTELLT, ' ');
+    // Dreimal: „… 4K UHD Dolby Audio" braucht drei Durchlaeufe.
+    t = t.replace(QUALITAET_ENDE, '').replace(QUALITAET_ENDE, '')
+         .replace(QUALITAET_ENDE, '');
+    t = t.replace(/\s{2,}/g, ' ')
+         .replace(/^[\s|:·\-]+/, '')
+         .replace(/[\s|:·\-]+$/, '');
+    // Notausgang: Ein Titel, der NUR aus Qualitaetsangaben besteht, waere sonst
+    // leer – dann lieber das Original als eine namenlose Zeile.
+    return t.length >= 2 ? t : roh;
+  }
+
+  /*
+   * Anbieter-Kuerzel („TOP - ", „4K:", „IE|") vor Titeln erkennen.
+   *
+   * Auf diesem Panel beginnt in der Kategorie „TOP KIDS BLURAY" JEDER der 100
+   * Filme mit „TOP - ". Das Kuerzel frisst die erste Haelfte der Beschriftung,
+   * und der echte Titel wird dahinter abgeschnitten („TOP - Justice League:
+   * Crisis on…").
+   *
+   * Eine feste Liste bekannter Kuerzel waere falsch: Jedes Panel hat andere,
+   * und echte Titel faengt man damit mit – „IT: Chapter Two", „M: Eine Stadt
+   * sucht einen Moerder", „TED: For the Love of Science" wuerden verstuemmelt.
+   * Deshalb wird GELERNT statt geraten: Ein Kuerzel gilt nur, wenn es viele
+   * Titel DERSELBEN Liste anfuehrt. Gegen den echten Katalog gemessen kuerzt
+   * das 26.328 von 42.907 Sendernamen und laesst die Faelle oben in Ruhe.
+   */
+  function praefixVon(titel) {
+    // Kleinbuchstaben schliessen aus: „The Matrix" darf nie „The" ergeben.
+    var m = /^([A-Z0-9+._]{1,12})\s*[-:|]\s+/.exec(String(titel || ''));
+    return m ? m[1] : null;
+  }
+
+  /**
+   * Kuerzel bestimmen, die in dieser Liste wirklich Anbietertags sind.
+   * `mindestZahl` faengt kurze Listen ab: Bei drei Titeln ist „alle drei
+   * fangen mit IT: an" kein Beleg.
+   */
+  function tagsErkennen(titel, mindestAnteil, mindestZahl) {
+    mindestAnteil = mindestAnteil || 0.3;
+    mindestZahl = mindestZahl || 4;
+    var zaehler = Object.create(null), gesamt = 0, i;
+    for (i = 0; i < titel.length; i++) {
+      var pf = praefixVon(titel[i]);
+      gesamt++;
+      if (pf) zaehler[pf] = (zaehler[pf] || 0) + 1;
+    }
+    var tags = Object.create(null);
+    if (gesamt < mindestZahl) return tags;
+    for (var k in zaehler) {
+      if (zaehler[k] >= mindestZahl && zaehler[k] / gesamt >= mindestAnteil) tags[k] = true;
+    }
+    return tags;
+  }
+
+  /** Titel fuer die Anzeige um sein Kuerzel kuerzen – nur wenn Rest bleibt. */
+  function titelOhneTag(titel, tags) {
+    var pf = praefixVon(titel);
+    if (!pf || !tags || !tags[pf]) return titel;
+    var rest = String(titel).replace(/^([A-Z0-9+._]{1,12})\s*[-:|]\s+/, '');
+    // Ein Sender, der wirklich „TOP - 1" heisst, soll nicht zu „1" werden.
+    return rest.length >= 2 ? rest : titel;
+  }
+
   function trefferRang(titel, anfrage, teile) {
     if (!titel || !anfrage) return 0;
     var t = titel.toLowerCase();
@@ -1316,10 +1428,15 @@
     ARCHIV_MAX_MINUTEN: ARCHIV_MAX_MINUTEN,
     parseCategories: parseCategories,
     parseLiveStreams: parseLiveStreams,
+    istTrennzeile: istTrennzeile,
     parseVodStreams: parseVodStreams,
     scanVodIndex: scanVodIndex,
     scanSeriesIndex: scanSeriesIndex,
     trefferRang: trefferRang,
+    titelKurz: titelKurz,
+    praefixVon: praefixVon,
+    tagsErkennen: tagsErkennen,
+    titelOhneTag: titelOhneTag,
     sucheZerlegen: sucheZerlegen,
     parseSeriesList: parseSeriesList,
     parseEpisodes: parseEpisodes,

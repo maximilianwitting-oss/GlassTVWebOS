@@ -291,24 +291,44 @@
    */
   function revealFocus(node, sanft) {
     var rand = sanft ? 0 : 90;
-    var box = node.getBoundingClientRect();
 
+    /*
+     * Erst ALLES messen, dann ALLES schreiben.
+     *
+     * Die vorherige Fassung schrieb `row.scrollLeft` mitten zwischen zwei
+     * Messungen. Jeder Schreibzugriff auf eine Scrollposition macht das
+     * Layout ungueltig, und das naechste `getBoundingClientRect()` muss es
+     * deshalb neu erzwingen – zwei Vollumbrueche je Fokuswechsel statt einem.
+     * Beim gehaltenen Pfeil (Tastenwiederholung 100–130 ms) sind das rund
+     * zwanzig erzwungene Umbrueche je Sekunde ueber eine Liste mit bis zu
+     * 600 Zeilen.
+     *
+     * Die zweite Messung faellt ersatzlos weg: `row` ist ein reiner
+     * Waagerecht-Scroller (`.row` traegt `overflow-y: hidden`, die Chipreihe
+     * ist einzeilig) – ein `scrollLeft` kann `top`/`bottom` gar nicht
+     * veraendern.
+     */
     var row = scrollParent(node, true);
-    if (row) {
-      var rb = row.getBoundingClientRect();
-      if (box.left < rb.left + 24) row.scrollLeft -= (rb.left + 24 - box.left);
-      else if (box.right > rb.right - 24) row.scrollLeft += (box.right - rb.right + 24);
-    }
-
     var col = scrollParent(node, false) || el.content;
-    if (col) {
-      var cb = col.getBoundingClientRect();
-      box = node.getBoundingClientRect();
+
+    var box = node.getBoundingClientRect();
+    var rb = row ? row.getBoundingClientRect() : null;
+    var cb = col ? col.getBoundingClientRect() : null;
+
+    var dx = 0, dy = 0;
+    if (rb) {
+      if (box.left < rb.left + 24) dx = -(rb.left + 24 - box.left);
+      else if (box.right > rb.right - 24) dx = (box.right - rb.right + 24);
+    }
+    if (cb) {
       // Großzügiger Rand: Auf dem Fernseher soll das fokussierte Element nie
       // an der Kante kleben, sonst sieht man den Kontext nicht mehr.
-      if (box.top < cb.top + rand) col.scrollTop -= (cb.top + rand - box.top);
-      else if (box.bottom > cb.bottom - rand) col.scrollTop += (box.bottom - cb.bottom + rand);
+      if (box.top < cb.top + rand) dy = -(cb.top + rand - box.top);
+      else if (box.bottom > cb.bottom - rand) dy = (box.bottom - cb.bottom + rand);
     }
+
+    if (dx) row.scrollLeft += dx;
+    if (dy) col.scrollTop += dy;
   }
 
   /**
@@ -346,9 +366,57 @@
     return kandidaten[0];
   }
 
+  /**
+   * Schneller Weg zum Nachbarn: das Geschwisterelement.
+   *
+   * Der allgemeine Weg unten vermisst JEDES fokussierbare Element und steigt
+   * fuer jeden Kandidaten zusaetzlich die Elternkette hoch. Auf dem Geraet
+   * gemessen, bei 823 fokussierbaren Elementen (720 Senderzeilen):
+   *
+   *     collectFocusables                 2,0 ms
+   *     getBoundingClientRect je Element  9,8 ms
+   *     scrollParent je Kandidat         14,0 ms   <- der groesste Posten
+   *     ---------------------------------------
+   *     je Tastendruck                   29,9 ms  -> Median 12 fps
+   *
+   * In einer einspaltigen Liste ist der senkrechte Nachbar aber immer das
+   * Geschwisterelement, und in einer Reihe der waagerechte. Zwei Messungen
+   * statt 1.600: gemessen 4,4 ms statt 30 ms.
+   *
+   * Die Pruefungen sind bewusst streng. Im Poster-Raster ist das naechste
+   * Geschwisterelement bei `dy` die Kachel RECHTS – die faellt an der
+   * Deckungspruefung durch, und der allgemeine Weg uebernimmt. Genauso beim
+   * Sprung zwischen zwei Regalen, wo die Elemente gar keine Geschwister sind.
+   */
+  function nachbarSchnell(active, dx, dy) {
+    var vor = (dx > 0 || dy > 0);
+    var k = vor ? active.nextElementSibling : active.previousElementSibling;
+    if (!k || !k.className || String(k.className).indexOf('focusable') < 0) return null;
+    var a = active.getBoundingClientRect();
+    var b = k.getBoundingClientRect();
+    if (b.width === 0 && b.height === 0) return null;
+    var mx = (b.left + b.width / 2) - (a.left + a.width / 2);
+    var my = (b.top + b.height / 2) - (a.top + a.height / 2);
+    if (dy !== 0) {
+      if (dy > 0 ? my <= 8 : my >= -8) return null;   // liegt nicht in der Richtung
+      if (Math.abs(mx) > 24) return null;             // keine Deckung: kein Raster-Nachbar
+      return k;
+    }
+    if (dx > 0 ? mx <= 8 : mx >= -8) return null;
+    if (Math.abs(my) > 24) return null;
+    return k;
+  }
+
   function moveFocus(dx, dy) {
-    collectFocusables();
     var active = document.activeElement;
+    if (active && active.className &&
+        String(active.className).indexOf('focusable') >= 0) {
+      var schnell = nachbarSchnell(active, dx, dy);
+      if (schnell) { schnell.focus(); revealFocus(schnell); return; }
+    }
+
+    collectFocusables();
+    active = document.activeElement;
     if (!active || focusables.indexOf(active) < 0) { focusFirst(); return; }
     var from = active.getBoundingClientRect();
     var best = null, bestScore = Infinity;
@@ -374,7 +442,15 @@
       // Versatz darf dann fast nichts kosten, sonst gewinnt ein zufällig
       // günstig stehender Chip weit außen.
       if (dy !== 0) {
-        var row = scrollParent(node, true);
+        /*
+         * Ergebnis am Knoten merken: `scrollParent` liest `scrollWidth` und
+         * `clientWidth` und steigt dabei die Elternkette hoch – auf dem Geraet
+         * der groesste Einzelposten dieser Schleife (14 von 18 ms). Das
+         * Ergebnis haengt nur am Aufbau der Seite, nicht am Tastendruck; die
+         * Knoten werden beim Neuzeichnen ohnehin verworfen.
+         */
+        var row = node._reihe;
+        if (row === undefined) row = node._reihe = scrollParent(node, true);
         if (row && row !== activeRow) score = along + across * 0.15;
       }
       if (score < bestScore) { bestScore = score; best = node; }
@@ -423,7 +499,19 @@
     // TMDB liefert feste Größenstufen; „original" ist für eine 232-px-Kachel
     // etwa das Zwanzigfache dessen, was gebraucht wird.
     if (url.indexOf('image.tmdb.org/t/p/') >= 0) {
-      return url.replace(/\/t\/p\/(original|w\d{3,4})\//, breit ? '/t/p/w780/' : '/t/p/w342/');
+      /*
+       * Jede Groessenstufe treffen, nicht nur `original` und `wNNN`.
+       *
+       * Die Poster dieser Quelle kommen als `/t/p/w600_and_h900_bestv2/…` –
+       * nach der Zahl steht ein Unterstrich, kein Schraegstrich. Der alte
+       * Ausdruck griff dort nicht, und die App lud auf eine 232-px-Kachel ein
+       * 600x900-Bild. Auf dem Geraet gemessen, 61 Poster gleichzeitig ueber
+       * Netz: groesste Bildluecke 467 ms gegen 250 ms, Summe der Blockaden
+       * ueber 33 ms 934 ms gegen 500 ms, alle geladen nach 1892 ms gegen
+       * 1430 ms – und rund ein Drittel des dekodierten Bildspeichers.
+       * Das waren die groessten Einzelblockaden der ganzen Oberflaeche.
+       */
+      return url.replace(/\/t\/p\/[^\/]+\//, breit ? '/t/p/w780/' : '/t/p/w342/');
     }
     return url;
   }
@@ -443,18 +531,32 @@
   function lazyPruefen() {
     var hoehe = window.innerHeight || 1080;
     var breite = window.innerWidth || 1920;
-    var noch = [];
-    for (var i = 0; i < lazyBilder.length; i++) {
-      var img = lazyBilder[i];
+    var noch = [], nah = [], i, img, r;
+
+    /*
+     * Zwei getrennte Durchlaeufe: erst messen, dann schreiben.
+     *
+     * Vorher stand `setAttribute('src', …)` zwischen zwei Messungen. Ein
+     * Attributwechsel macht den Stil des Bildes ungueltig, also musste der
+     * Browser fuer JEDES weitere `getBoundingClientRect()` das Layout neu
+     * erzwingen – bei 120 Senderlogos 120 Umbrueche statt einem, und das
+     * genau waehrend des Scrollens.
+     */
+    for (i = 0; i < lazyBilder.length; i++) {
+      img = lazyBilder[i];
       if (!img.parentNode) continue;            // Element ist weg
       noch.push(img);
-      var r = img.getBoundingClientRect();
-      var nah = r.bottom > -hoehe && r.top < hoehe * 2 &&
-                r.right > -breite && r.left < breite * 2;
+      r = img.getBoundingClientRect();
+      nah.push(r.bottom > -hoehe && r.top < hoehe * 2 &&
+               r.right > -breite && r.left < breite * 2);
+    }
+
+    for (i = 0; i < noch.length; i++) {
+      img = noch[i];
       var quelle = img.getAttribute('data-src');
-      if (nah && quelle && img.getAttribute('src') !== quelle) {
-        img.setAttribute('src', quelle);
-      } else if (!nah && img.getAttribute('src')) {
+      if (nah[i]) {
+        if (quelle && img.getAttribute('src') !== quelle) img.setAttribute('src', quelle);
+      } else if (img.getAttribute('src')) {
         // Entladen gibt den dekodierten Speicher wieder frei.
         img.removeAttribute('src');
       }
@@ -462,9 +564,30 @@
     lazyBilder = noch;
   }
 
+  var lazyLetzterLauf = 0;
+
+  /**
+   * Hinterflanke statt Vorderflanke.
+   *
+   * Die alte Drossel plante den Durchlauf beim ERSTEN Scroll-Ereignis und
+   * verwarf alle weiteren. Beim gehaltenen Pfeil feuert `revealFocus` aber
+   * alle 100–130 ms ein solches Ereignis – der teure Durchlauf fiel damit
+   * mitten in die Bewegung statt danach. Jetzt wird gewartet, bis der Nutzer
+   * stehenbleibt; die Obergrenze von 600 ms sorgt dafuer, dass beim langen
+   * Durchscrollen trotzdem Bilder nachkommen und die Liste nicht leer wirkt.
+   */
   function lazyAnstossen() {
-    if (lazyTimer) return;
-    lazyTimer = setTimeout(function () { lazyTimer = null; lazyPruefen(); }, 120);
+    var jetzt = Date.now();
+    if (jetzt - lazyLetzterLauf > 600) {
+      lazyLetzterLauf = jetzt;
+      if (lazyTimer) { clearTimeout(lazyTimer); lazyTimer = null; }
+      lazyPruefen();
+      return;
+    }
+    if (lazyTimer) clearTimeout(lazyTimer);
+    lazyTimer = setTimeout(function () {
+      lazyTimer = null; lazyLetzterLauf = Date.now(); lazyPruefen();
+    }, 180);
   }
 
   // ---------------------------------------------------------- Bausteine ----
@@ -573,7 +696,7 @@
     return out;
   }
 
-  function card(title, imageUrl, onSelect, wide, fkey, marken) {
+  function card(title, imageUrl, onSelect, wide, fkey, marken, gruppe) {
     var c = element('div', 'card focusable' + (wide ? ' wide' : ''));
     c.tabIndex = 0;
     // Ohne Merker landete der Fokus nach jedem Blick in eine Detailseite
@@ -591,7 +714,12 @@
       box.appendChild(leiste);
     }
     c.appendChild(box);
-    c.appendChild(element('div', 'label', title));
+    /*
+     * Beschriftung gekuerzt, Marken aus dem ORIGINAL (siehe oben): Sonst faende
+     * `markenAusTitel` das „4K" nicht mehr, das `titelKurz` gerade entfernt hat
+     * – die Angabe stuende dann weder als Marke noch im Text.
+     */
+    c.appendChild(element('div', 'label', anzeigeName(title, gruppe)));
     c.onclick = onSelect;
     return c;
   }
@@ -745,6 +873,80 @@
 
   /** Aufrufen, wenn sich Bibliothek oder Katalog-Zwischenspeicher aendern. */
   function bibliothekGeaendert() { bibliotheksStempel++; }
+
+  /*
+   * Anzeigenamen: Anbieter-Kuerzel und Zeichenmuell entfernen.
+   *
+   * Der Bezugsrahmen ist die GRUPPE, nicht die gerade gezeichnete Liste. Nur
+   * so wirkt die Kuerzung auch dort, wo eine Liste gemischt ist – in der
+   * Suche, unter „Jetzt im TV", auf der Detailseite. Ueber die ganze
+   * Bibliothek gerechnet faende die Erkennung ohnehin nichts: Kein Kuerzel
+   * fuehrt 42.907 Sender an, wohl aber die 191 Sender einer UK-Gruppe.
+   *
+   * Der Satz wird einmal je Bibliotheksstand gebaut, in EINEM Durchlauf und
+   * ohne die Titel zu behalten – gezaehlt wird nur. Auf diesem Panel bleiben
+   * davon rund 450 Eintraege uebrig.
+   */
+  var tagSatz = null;
+
+  /**
+   * Kuerzel einer Titelliste je Gruppe bestimmen und in `ziel` ablegen.
+   * Zaehlt nur – die Titel selbst werden nicht behalten.
+   */
+  function tagsSammeln(ziel, liste, feld) {
+    var zaehler = Object.create(null);   // Gruppe -> { Kuerzel -> Anzahl }
+    var gesamt = Object.create(null);    // Gruppe -> Anzahl Eintraege
+    var i, g, pf;
+    for (i = 0; i < liste.length; i++) {
+      g = liste[i].group;
+      if (!g) continue;
+      gesamt[g] = (gesamt[g] || 0) + 1;
+      pf = Core.praefixVon(liste[i][feld]);
+      if (!pf) continue;
+      if (!zaehler[g]) zaehler[g] = Object.create(null);
+      zaehler[g][pf] = (zaehler[g][pf] || 0) + 1;
+    }
+    for (g in gesamt) {
+      if (gesamt[g] < 4 || !zaehler[g]) continue;
+      var satz = null;
+      for (pf in zaehler[g]) {
+        if (zaehler[g][pf] >= 4 && zaehler[g][pf] / gesamt[g] >= 0.3) {
+          if (!satz) satz = Object.create(null);
+          satz[pf] = true;
+        }
+      }
+      if (satz) ziel[g] = satz;
+    }
+  }
+
+  /*
+   * Der Durchlauf ueber die Sender kostet einen Gang durch 42.907 Namen –
+   * bezahlbar, aber nur EINMAL je Quelle. Bewusst NICHT an
+   * `bibliothekGeaendert()` gehaengt: Das wird bei jedem geladenen Katalog und
+   * bei jeder geoeffneten Serie gerufen, der Satz waere dann bei jedem
+   * Kategoriewechsel neu ueber alle Sender zu bauen. Frisch geladene
+   * Kategorien tragen ihre Kuerzel stattdessen selbst nach (katalogAblegen).
+   */
+  function tagSatzHolen() {
+    if (tagSatz) return tagSatz;
+    tagSatz = Object.create(null);
+    tagsSammeln(tagSatz, state.library.channels, 'name');
+    tagsSammeln(tagSatz, state.library.movies, 'title');
+    tagsSammeln(tagSatz, state.library.series, 'title');
+    for (var k in state.katalogCache) tagsSammeln(tagSatz, state.katalogCache[k], 'title');
+    return tagSatz;
+  }
+
+  /** Name, wie er auf dem Bildschirm stehen soll. Nur Anzeige, nie Datenhaltung. */
+  function anzeigeName(text, gruppe) {
+    if (!text) return '';
+    var t = text;
+    if (gruppe) {
+      var satz = tagSatzHolen()[gruppe];
+      if (satz) t = Core.titelOhneTag(t, satz);
+    }
+    return Core.titelKurz(t);
+  }
 
   function idIndexHolen() {
     if (idIndex && idIndexStempel === bibliotheksStempel) return idIndex;
@@ -1065,6 +1267,18 @@
       // Fehlerrot muss auf dunklem Grund aufhellen: Das feste #b3261e lag auf
       // den dunklen Designs bei 2,3:1 – dunkelrote Schrift auf dunklem Grund.
       root.style.setProperty('--fehler', '#ff8a80');
+      root.style.setProperty('--titel-halo', '0 2px 16px rgba(0,0,0,0.55)');
+      // Muss hier stehen, nicht nur im hellen Zweig: Sonst bliebe beim
+      // Wechsel zurueck auf ein dunkles Design das dunkle Rot haengen.
+      root.style.setProperty('--live', '#ff4d4d');
+      // Auf dunklem Grund darf Erhebung ueber Helligkeit kommen – dort ist
+      // nach oben Platz. Der Schatten muss dafuer kraeftiger sein, weil auf
+      // OLED-Schwarz nur ein starker Abfall ueberhaupt als Kante gelesen wird.
+      root.style.setProperty('--flaeche-inhalt', 'rgba(255,255,255,0.10)');
+      root.style.setProperty('--kante-inhalt', 'rgba(255,255,255,0.26)');
+      root.style.setProperty('--hebung-1', '0 1px 2px rgba(0,0,0,0.50)');
+      root.style.setProperty('--hebung-2',
+        '0 2px 6px rgba(0,0,0,0.55), 0 18px 36px -14px rgba(0,0,0,0.80)');
       root.style.setProperty('--fokus-ring', '#eae7f2');
       /*
        * Glaswerte je Helligkeit. Auf dunklem Grund ist die Flaeche HELLER als
@@ -1088,6 +1302,25 @@
       root.style.setProperty('--text-dim', '#5a5670');
       root.style.setProperty('--on-accent', '#ffffff');
       root.style.setProperty('--fehler', '#b3261e');
+      /*
+       * Auf hellem Grund traegt ein dunkler Schatten unter DUNKLER Schrift
+       * nicht – dort braucht der Titel einen hellen Halo.
+       */
+      root.style.setProperty('--titel-halo', '0 2px 16px rgba(255,255,255,0.85)');
+      /*
+       * Weiss auf #ff4d4d erreicht 3,27:1 – unter der Schwelle, ausgerechnet
+       * beim Zeichen, das am schnellsten gelesen werden soll, und auf der
+       * Startseite stehen fuenf davon nebeneinander. #d92d2d ergibt 4,81:1.
+       * Nur auf hellen Designs: Auf dunklem Grund ist das helle Rot richtig.
+       */
+      root.style.setProperty('--live', '#d92d2d');
+      root.style.setProperty('--flaeche-inhalt', 'rgba(255,255,255,0.90)');
+      root.style.setProperty('--kante-inhalt', 'rgba(0,0,0,0.30)');
+      root.style.setProperty('--hebung-1',
+        '0 1px 0 rgba(20,18,45,0.10), 0 2px 4px rgba(20,18,45,0.10)');
+      root.style.setProperty('--hebung-2',
+        '0 1px 0 rgba(20,18,45,0.12), 0 2px 6px rgba(20,18,45,0.12),' +
+        '0 16px 32px -12px rgba(20,18,45,0.26)');
       root.style.setProperty('--fokus-ring', '#1b1926');
       // Auf hellem Grund ist die Flaeche DUNKLER als der Grund: Eine fast
       // weisse Lichtkante hebt sich klar ab, ein echter Schatten traegt.
@@ -1627,6 +1860,8 @@
   function katalogAblegen(art, katID, items) {
     var k = katalogSchluessel(art, katID);
     state.katalogCache[k] = items;
+    // Kuerzel dieser Kategorie nachtragen – der Satz der Sender bleibt stehen.
+    if (tagSatz) tagsSammeln(tagSatz, items, 'title');
     bibliothekGeaendert();
     state.katalogReihe.push(k);
     while (state.katalogReihe.length > KATALOG_CACHE_MAX) {
@@ -1793,7 +2028,7 @@
         row.setAttribute('data-fkey', 'kat:' + art + ':' + kat.id);
         row.appendChild(element('div', 'logo initiale', initialeVon(kat.name)));
         var info = element('div', 'info');
-        info.appendChild(element('div', 'name', kat.name));
+        info.appendChild(element('div', 'name', Core.titelKurz(kat.name)));
         var geladen = !!state.katalogCache[katalogSchluessel(art, kat.id)];
         info.appendChild(element('div', 'sub', geladen ? 'geladen' : 'noch nicht geladen'));
         row.appendChild(info);
@@ -1866,6 +2101,18 @@
      */
     var neueAnsicht = state.view !== letzteAnsicht;
     letzteAnsicht = state.view;
+    /*
+     * Ueberblenden – aber nur beim echten Ansichtswechsel. Die CSS-Klasse
+     * `wechsel` gab es bereits, gesetzt hat sie nie jemand; der Wechsel lief
+     * bis hierher voellig ohne Uebergang. Bei jedem `render()` einzublenden
+     * waere schlimmer als gar nichts: `epgAuffrischen` zeichnet jede Minute
+     * neu, der Bildschirm blinkte dann im Minutentakt, waehrend der Nutzer
+     * ruhig in der Senderliste steht.
+     */
+    if (neueAnsicht) {
+      el.content.className = 'wechsel';
+      setTimeout(function () { el.content.className = ''; }, 160);
+    }
     setTimeout(function () {
       if (!restoreFocus()) ensureFocus();
       /*
@@ -1992,7 +2239,7 @@
     }
     var sZuletzt = shelf('Zuletzt gesehen', zuletztLive, function (ch) {
       return card(ch.name, ch.logoURL, function () { playChannel(ch); }, true,
-        'zuletzt:' + ch.id);
+        'zuletzt:' + ch.id, null, ch.group);
     });
     if (sZuletzt) el.content.appendChild(sZuletzt);
 
@@ -2030,7 +2277,7 @@
     var s2 = shelf(ohneEpg ? 'Sender' : 'Jetzt im TV', live, function (ch) {
       var now = Core.nowProgram(programsFor(ch));
       var c = card(ch.name, ch.logoURL, function () { playChannel(ch); }, true,
-        null, now ? ['LIVE'] : null);
+        null, now ? ['LIVE'] : null, ch.group);
       if (now) {
         c.appendChild(element('div', 'sub', now.title));
         var span = now.end - now.start;
@@ -2049,7 +2296,7 @@
     var sList = shelf('Meine Liste', listItems, function (it) {
       return card(it.title, it.posterURL, function () {
         if (it.episodes !== undefined) openSeries(it); else openMovie(it);
-      });
+      }, false, null, null, it.group);
     });
     if (sList) el.content.appendChild(sList);
 
@@ -2063,21 +2310,21 @@
     var empfPoolSerien = state.lazyKatalog ? geladeneSerien() : lib.series;
     var forYou = recommendations(empfPool, 'id', 20);
     var sFor = shelf('Für dich', forYou, function (m) {
-      return card(m.title, m.posterURL, function () { openMovie(m); });
+      return card(m.title, m.posterURL, function () { openMovie(m); }, false, null, null, m.group);
     });
     if (sFor) el.content.appendChild(sFor);
 
     var because = becauseYouWatched();
     if (because) {
       var sBec = shelf('Weil du „' + because.title + '“ gesehen hast', because.items, function (m) {
-        return card(m.title, m.posterURL, function () { openMovie(m); });
+        return card(m.title, m.posterURL, function () { openMovie(m); }, false, null, null, m.group);
       });
       if (sBec) el.content.appendChild(sBec);
     }
 
     var forYouSeries = recommendations(empfPoolSerien, 'id', 20);
     var sForS = shelf('Serien für dich', forYouSeries, function (x) {
-      return card(x.title, x.posterURL, function () { openSeries(x); });
+      return card(x.title, x.posterURL, function () { openSeries(x); }, false, null, null, x.group);
     });
     if (sForS) el.content.appendChild(sForS);
 
@@ -2086,13 +2333,13 @@
 
     var s3 = shelf(state.lazyKatalog ? 'Zuletzt geöffnete Filme' : 'Filme',
       filme.slice(0, 30), function (m) {
-        return card(m.title, m.posterURL, function () { openMovie(m); });
+        return card(m.title, m.posterURL, function () { openMovie(m); }, false, null, null, m.group);
       });
     if (s3) el.content.appendChild(s3);
 
     var s4 = shelf(state.lazyKatalog ? 'Zuletzt geöffnete Serien' : 'Serien',
       serien.slice(0, 30), function (x) {
-        return card(x.title, x.posterURL, function () { openSeries(x); });
+        return card(x.title, x.posterURL, function () { openSeries(x); }, false, null, null, x.group);
       });
     if (s4) el.content.appendChild(s4);
 
@@ -2142,7 +2389,13 @@
 
     var box = document.createElement('div');
     // Sehr lange Listen bremsen den TV-Browser aus – in Blöcken nachladen.
-    renderChannelChunk(box, list, 0, 120);
+    /*
+     * 120 -> 40 je Block. Auf dem Geraet gemessen kostete „Weitere 120 Sender"
+     * 128 ms Rechenzeit und rund 317 ms Stillstand – ein deutlich sichtbarer
+     * Ruck. Bei 40 liegt der Aufbau unter der Wahrnehmungsschwelle, und
+     * weiterdruecken tut man ohnehin.
+     */
+    renderChannelChunk(box, list, 0, 40);
     el.content.appendChild(box);
   }
 
@@ -2155,7 +2408,7 @@
     for (var i = from; i < list.length && i < from + count; i++) {
       (function (item) {
         grid.appendChild(card(item.title, item.posterURL,
-          function () { onSelect(item); }, false, item.id));
+          function () { onSelect(item); }, false, item.id, null, item.group));
       })(list[i]);
     }
     if (from + count < list.length) {
@@ -2178,10 +2431,10 @@
       box.appendChild(channelRow(list[i], i + 1));
     }
     if (from + count < list.length) {
-      var more = button('Weitere ' + Math.min(120, list.length - from - count) + ' Sender', function () {
+      var more = button('Weitere ' + Math.min(40, list.length - from - count) + ' Sender', function () {
         box.removeChild(more);
         var ersteNeue = box.childNodes.length;
-        renderChannelChunk(box, list, from + count, 120);
+        renderChannelChunk(box, list, from + count, 40);
         collectFocusables();
         // Der Knopf, auf dem der Fokus lag, ist weg – ohne Übergabe landet der
         // Fokus im Nichts und der nächste Tastendruck springt an den Listenanfang.
@@ -2244,6 +2497,70 @@
     return box;
   }
 
+  /**
+   * Inhalt einer Senderzeile aufbauen. Ausgelagert, damit der Minutentakt die
+   * Zeile fortschreiben kann, ohne die ganze Ansicht neu zu bauen.
+   */
+  function zeileInfoFuellen(info, ch, guide) {
+    clear(info);
+    var programs = programsFor(ch);
+    var now = Core.nowProgram(programs);
+    var next = Core.nextProgram(programs);
+    info.appendChild(element('div', 'name', anzeigeName(ch.name, ch.group)));
+    if (guide) {
+      if (now) {
+        info.appendChild(element('div', 'sub',
+          timeText(now.start) + '–' + timeText(now.end) + '   ' + now.title));
+        var s1 = now.end - now.start;
+        info.appendChild(progressBar(s1 > 0 ? (Date.now() - now.start) / s1 : 0));
+      }
+      if (next) {
+        info.appendChild(element('div', 'sub',
+          'danach ' + timeText(next.start) + '   ' + next.title));
+      }
+      return now;
+    }
+    if (now) {
+      info.appendChild(element('div', 'sub', now.title +
+        (next ? '   ·   danach ' + timeText(next.start) + ' ' + next.title : '')));
+      var s2 = now.end - now.start;
+      info.appendChild(progressBar(s2 > 0 ? (Date.now() - now.start) / s2 : 0));
+    } else {
+      info.appendChild(element('div', 'sub', Core.titelKurz(ch.group)));
+    }
+    return now;
+  }
+
+  /**
+   * Sichtbare Senderzeilen fortschreiben, statt die Ansicht neu zu bauen.
+   *
+   * Der Minutentakt rief bisher `render()`. Auf dem Geraet gemessen kostete
+   * das 76 ms Rechenzeit und rund 450 ms Stillstand – und schlimmer: Die Liste
+   * fiel von 360 nachgeladenen Zeilen auf 120 zurueck, `scrollTop` sprang auf
+   * 0, und der Fokus landete wieder ganz oben. Wer sich in die Senderliste
+   * hinuntergearbeitet hatte, wurde JEDE MINUTE an den Anfang geworfen.
+   */
+  function epgZeilenAuffrischen() {
+    var zeilen = el.content.querySelectorAll('.channel');
+    for (var i = 0; i < zeilen.length; i++) {
+      var row = zeilen[i];
+      if (!row._ch) continue;                   // Archivzeile o. ae.
+      var info = row.querySelector('.info');
+      if (!info) continue;
+      var laeuft = zeileInfoFuellen(info, row._ch, row._guide);
+      // „on-air"-Balken und LIVE-Pille mitziehen.
+      var an = row.className.indexOf('on-air') >= 0;
+      if (laeuft && !an) row.className += ' on-air';
+      else if (!laeuft && an) row.className = row.className.replace(/\s*\bon-air\b/g, '');
+      var pille = row.querySelector('.badge-live');
+      if (laeuft && !pille && !row._guide) {
+        row.appendChild(element('span', 'badge-live', 'LIVE'));
+      } else if (!laeuft && pille) {
+        pille.parentNode.removeChild(pille);
+      }
+    }
+  }
+
   function channelRow(ch, number) {
     var programs = programsFor(ch);
     var now = Core.nowProgram(programs);
@@ -2269,16 +2586,10 @@
     }
 
     var info = element('div', 'info');
-    info.appendChild(element('div', 'name', ch.name));
-    if (now) {
-      info.appendChild(element('div', 'sub', now.title +
-        (next ? '   ·   danach ' + timeText(next.start) + ' ' + next.title : '')));
-      var span = now.end - now.start;
-      info.appendChild(progressBar(span > 0 ? (Date.now() - now.start) / span : 0));
-    } else {
-      info.appendChild(element('div', 'sub', ch.group));
-    }
+    zeileInfoFuellen(info, ch, false);
     row.appendChild(info);
+    // Der Auffrischer braucht den Sender und die Bauart der Zeile.
+    row._ch = ch; row._guide = false;
 
     if (isFavorite(ch.id)) row.appendChild(element('span', 'badge-fav', '★'));
     if (now) row.appendChild(element('span', 'badge-live', 'LIVE'));
@@ -2415,7 +2726,7 @@
       focusWuenschen('kat:' + art + ':' + wahl.id);
       if (art === 'm') state.katWahl.movies = null; else state.katWahl.series = null;
       render();
-    });
+    }, true);
     zurueck.setAttribute('data-fkey', 'katzurueck:' + art);
     el.content.appendChild(zurueck);
 
@@ -2521,11 +2832,11 @@
       el.content.appendChild(box);
     }
     var s1 = shelf('Filme', favMovies, function (m) {
-      return card(m.title, m.posterURL, function () { openMovie(m); });
+      return card(m.title, m.posterURL, function () { openMovie(m); }, false, null, null, m.group);
     });
     if (s1) el.content.appendChild(s1);
     var s2 = shelf('Serien', favSeries, function (s) {
-      return card(s.title, s.posterURL, function () { openSeries(s); });
+      return card(s.title, s.posterURL, function () { openSeries(s); }, false, null, null, s.group);
     });
     if (s2) el.content.appendChild(s2);
 
@@ -2533,7 +2844,7 @@
     var s3 = shelf('Meine Liste', listItems, function (it) {
       return card(it.title, it.posterURL, function () {
         if (it.episodes !== undefined) openSeries(it); else openMovie(it);
-      });
+      }, false, null, null, it.group);
     });
     if (s3) el.content.appendChild(s3);
   }
@@ -2735,7 +3046,7 @@
       if (cand.group === m.group && cand.id !== m.id) similar.push(cand);
     }
     var s = shelf('Ähnliche Titel', similar, function (x) {
-      return card(x.title, x.posterURL, function () { openMovie(x); });
+      return card(x.title, x.posterURL, function () { openMovie(x); }, false, null, null, x.group);
     });
     if (s) el.content.appendChild(s);
   }
@@ -2990,11 +3301,11 @@
       el.content.appendChild(box);
     }
     var s1 = shelf(spartenTitel('Filme', mv), mv, function (m) {
-      return card(m.title, m.posterURL, function () { openMovie(m); }, false, m.id);
+      return card(m.title, m.posterURL, function () { openMovie(m); }, false, m.id, null, m.group);
     });
     if (s1) el.content.appendChild(s1);
     var s2 = shelf(spartenTitel('Serien', sr), sr, function (s) {
-      return card(s.title, s.posterURL, function () { openSeries(s); }, false, s.id);
+      return card(s.title, s.posterURL, function () { openSeries(s); }, false, s.id, null, s.group);
     });
     if (s2) el.content.appendChild(s2);
   }
@@ -3421,9 +3732,7 @@
     var box = document.createElement('div');
     for (var i = 0; i < withEpg.length && i < grenze; i++) {
       (function (ch) {
-        var programs = programsFor(ch);
-        var now = Core.nowProgram(programs);
-        var next = Core.nextProgram(programs);
+        var now = Core.nowProgram(programsFor(ch));
         var row = element('div', 'channel focusable' + (now ? ' on-air' : ''));
         row.tabIndex = 0;
         // Wie in der Senderliste: Ohne Merker sprang der Fokus nach der blauen
@@ -3438,17 +3747,9 @@
           row.appendChild(img);
         } else row.appendChild(element('div', 'logo'));
         var info = element('div', 'info');
-        info.appendChild(element('div', 'name', ch.name));
-        if (now) {
-          info.appendChild(element('div', 'sub',
-            timeText(now.start) + '–' + timeText(now.end) + '   ' + now.title));
-          var span = now.end - now.start;
-          info.appendChild(progressBar(span > 0 ? (Date.now() - now.start) / span : 0));
-        }
-        if (next) {
-          info.appendChild(element('div', 'sub', 'danach ' + timeText(next.start) + '   ' + next.title));
-        }
+        zeileInfoFuellen(info, ch, true);
         row.appendChild(info);
+        row._ch = ch; row._guide = true;
         var gArchiv = archivKnopf(ch);
         if (gArchiv) row.appendChild(gArchiv);
         row.onclick = function () { playChannel(ch); };
@@ -3672,10 +3973,15 @@
     actions.appendChild(button('Statistik', function () {
       state.view = { type: 'stats' }; render();
     }, true));
+    /*
+     * Als Geisterknopf: Gefuellt war er der EINZIGE Akzent zwischen sechs
+     * Geisterknoepfen und damit das lauteste Element der Einstellungen – der
+     * Akzent gehoert der Hauptgeste, und hier gibt es keine.
+     */
     actions.appendChild(button('Neu laden', function () {
       state.view = null;
       reloadSource();
-    }));
+    }, true));
     actions.appendChild(button('Quelle ändern', function () {
       // Alles verwerfen, was zur alten Quelle gehört: Sonst zeigt das EPG des
       // alten Anbieters weiter auf Kanäle des neuen, und eine gewählte
@@ -3683,6 +3989,7 @@
       state.source = null; state.view = null;
       state.epg = Object.create(null); state.rawLibrary = null;
       state.library = { channels: [], movies: [], series: [] };
+      tagSatz = null;   // Kuerzel gehoeren zur alten Quelle
       state.group = { live: null, movies: null, series: null };
       render();
     }, true));
@@ -4141,6 +4448,7 @@
     }
     var vorher = state.library && state.library.channels ? state.library.channels.length : 0;
     state.library = lib;
+    tagSatz = null;   // neue Quelle, neue Anbieter-Kuerzel
     bibliothekGeaendert();
     /*
      * Wird die Senderliste GROESSER (Sprache dazugeschaltet, Kategorie
@@ -4395,10 +4703,19 @@
     if (epgTakt) clearInterval(epgTakt);
     epgTakt = setInterval(function () {
       if (document.hidden) return;          // im Hintergrund nichts tun
-      // Jede Minute neu zeichnen, solange eine Ansicht mit EPG sichtbar ist.
-      if (!player.open && (state.tab === 'home' || state.tab === 'live' ||
-          (state.view && state.view.type === 'guide'))) {
-        render();
+      /*
+       * FORTSCHREIBEN, nicht neu zeichnen. `render()` kostete hier auf dem
+       * Geraet gemessen 76 ms Rechenzeit und rund 450 ms Stillstand – und warf
+       * die Liste von 360 nachgeladenen Zeilen auf 120 zurueck, `scrollTop`
+       * auf 0 und den Fokus an den Listenanfang. Jede Minute.
+       *
+       * Die Startseite baut weiter neu auf: Ihre Regale sind kurz, und ihre
+       * Kacheln tragen die EPG-Angabe nicht in einer `.channel`-Zeile.
+       */
+      if (!player.open) {
+        if (state.view && state.view.type === 'guide') epgZeilenAuffrischen();
+        else if (state.tab === 'live' && !state.view) epgZeilenAuffrischen();
+        else if (state.tab === 'home' && !state.view) render();
       }
       // Und alle vier Stunden die Daten selbst nachladen.
       if (Date.now() - epgGeholt > 4 * 3600 * 1000) loadEpg();
@@ -4862,10 +5179,10 @@
     if (code === 405) { state.view = { type: 'search', query: '' }; render(); e.preventDefault(); return; }
     if (code === 404) { state.view = { type: 'guide' }; render(); e.preventDefault(); return; }
 
-    if (code === 37) { moveFocus(-1, 0); e.preventDefault(); }
-    else if (code === 39) { moveFocus(1, 0); e.preventDefault(); }
-    else if (code === 38) { moveFocus(0, -1); e.preventDefault(); }
-    else if (code === 40) { moveFocus(0, 1); e.preventDefault(); }
+    if (code === 37) { navigationsTakt(); moveFocus(-1, 0); e.preventDefault(); }
+    else if (code === 39) { navigationsTakt(); moveFocus(1, 0); e.preventDefault(); }
+    else if (code === 38) { navigationsTakt(); moveFocus(0, -1); e.preventDefault(); }
+    else if (code === 40) { navigationsTakt(); moveFocus(0, 1); e.preventDefault(); }
     else if (code === 13) {
       gedruecktAn();
       var el2 = document.activeElement;
@@ -4951,6 +5268,32 @@
    * aus – auf einem Geraet, das fuer den Neuaufbau 200–600 ms braucht, ist
    * das die einzige sofortige Rueckmeldung auf einen Tastendruck.
    */
+  /**
+   * „Eilig" = die Pfeiltaste wird gehalten.
+   *
+   * Bei 100–130 ms Tastenwiederholung sieht man von einem 220-ms-Posterzoom
+   * nichts – bezahlt wird er trotzdem, mit einer Compositor-Ebene je
+   * Uebergangsstart, zehnmal je Sekunde. Waehrend der Serie deshalb kein
+   * Zierwerk; 220 ms nach der letzten Taste kommt es zurueck, fuer genau das
+   * Element, auf dem man stehen geblieben ist – der Moment, in dem man es
+   * ueberhaupt sieht.
+   */
+  var eiligTimer = null, letzteNavTaste = 0;
+
+  function navigationsTakt() {
+    var jetzt = Date.now();
+    if (jetzt - letzteNavTaste < 250 && document.body.className.indexOf('eilig') < 0) {
+      // Additiv, nicht zuweisend: `className = 'eilig'` loeschte `zeiger`.
+      document.body.className += ' eilig';
+    }
+    letzteNavTaste = jetzt;
+    if (eiligTimer) clearTimeout(eiligTimer);
+    eiligTimer = setTimeout(function () {
+      eiligTimer = null;
+      document.body.className = document.body.className.replace(/\s*\beilig\b/g, '');
+    }, 220);
+  }
+
   var gedruecktTimer = null;
   function gedruecktAn() {
     var a = document.activeElement;

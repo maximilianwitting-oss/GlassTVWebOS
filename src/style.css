@@ -18,6 +18,26 @@
   --surface: rgba(0, 0, 0, 0.045);
   --surface-strong: rgba(0, 0, 0, 0.10);
   --border: rgba(0, 0, 0, 0.14);
+  /*
+   * Zwei Rangstufen: Umgebung (Chips, Tabs) und Inhalt (Karten, Zeilen).
+   *
+   * Vorher trugen Karte, Senderzeile, Kategoriezeile, Chip, Tab und Panel
+   * exakt DIESELBE Flaeche, denselben Rand, denselben Radius – das Bild hatte
+   * keine Tiefe, sondern eine Textur. Auf hellen Designs zeigte das Material
+   * sogar in die falsche Richtung: Die Flaeche war mit rgba(0,0,0,0.045)
+   * DUNKLER als der Grund (#e5e5ea gegen #f0f0f5, 1,11:1) und las sich als
+   * Vertiefung, trug aber gleichzeitig einen Schlagschatten, der „erhaben"
+   * sagt. Beides zusammen ergab nichts.
+   *
+   * Auf einem Grund mit 87 % Leuchtdichte gibt es nach oben keine 13 % mehr –
+   * Erhebung KANN dort nicht ueber Helligkeit kommen. Sie kommt aus Kontur und
+   * Kontaktschatten: Der Rand steigt damit von 1,66:1 auf 2,10:1.
+   */
+  --flaeche-inhalt: rgba(255, 255, 255, 0.90);
+  --kante-inhalt: rgba(0, 0, 0, 0.30);
+  --hebung-1: 0 1px 0 rgba(20, 18, 45, 0.10), 0 2px 4px rgba(20, 18, 45, 0.10);
+  --hebung-2: 0 1px 0 rgba(20, 18, 45, 0.12), 0 2px 6px rgba(20, 18, 45, 0.12),
+              0 16px 32px -12px rgba(20, 18, 45, 0.26);
   --text: #1b1926;
   --text-dim: #5a5670;
   --accent: #8c80f7;
@@ -72,8 +92,24 @@
    */
   --kurve-ein:  cubic-bezier(0.2, 0, 0.2, 1);   /* hereinkommen */
   --kurve-aus:  cubic-bezier(0.4, 0, 1, 1);     /* hinausgehen  */
-  --dauer-ein:  160ms;
-  --dauer-aus:  110ms;
+
+  /*
+   * Zwei Geschwindigkeiten, nicht eine.
+   *
+   * Der Fokus folgt der FERNBEDIENUNG, alles andere einer ENTSCHEIDUNG.
+   * Die Tastenwiederholung liegt bei 100–130 ms: Mit 160 ms lief kein
+   * Fokusuebergang je zu Ende, der naechste Tastendruck kam vorher. Blink
+   * stapelt Uebergaenge nicht, es zielt vom Zwischenwert neu – sichtbar als
+   * Schleier aus zwei bis drei halb angehobenen Karten, und je Start und Ende
+   * legt der Compositor eine Ebene an und verwirft sie wieder. 90 ms passen
+   * unter das kuerzeste Intervall: Die Bewegung ist zuverlaessig fertig,
+   * bevor die naechste beginnt.
+   */
+  --dauer-fokus:      90ms;   /* folgt der Taste          */
+  --dauer-fokus-aus:  70ms;
+  --dauer-ein:       160ms;   /* folgt einer Entscheidung */
+  --dauer-aus:       110ms;
+  --dauer-zier:      220ms;   /* Zierde, setzt beim Durchscrollen aus */
 
   --a1:  4px;  --a2:  8px;  --a3: 12px;  --a4: 16px;
   --a5: 20px;  --a6: 24px;  --a7: 32px;  --a8: 40px;
@@ -207,6 +243,30 @@ nav { display: -webkit-flex; display: flex; }
  * gefüllt sind (Abspielen, Suchen, PIN setzen) – Akzent auf Akzent. Der innere
  * Ring in Grundfarbe trennt auf hellen wie dunklen Designs.
  */
+/*
+ * `position` steht im GRUNDZUSTAND, nicht im Fokus.
+ *
+ * `position: static -> relative` ist eine Layout-Aenderung: Blink bricht dafuer
+ * um, nicht nur neu zeichnet. Im Fokuszustand geschah das bei JEDEM
+ * Tastendruck zweimal – einmal fuer das verlassene, einmal fuer das neue
+ * Element –, also rund zwanzigmal je Sekunde beim gehaltenen Pfeil, in einem
+ * Dokument mit bis zu 600 Zeilen. `.tab`, `.chip` und `.channel` trugen
+ * `position: relative` ohnehin schon; ausgerechnet die drei meistfokussierten
+ * Elemente nicht.
+ *
+ * Die Grundtransition gehoert aus demselben Grund hierher: Stand sie nur auf
+ * `:focus`, verschwand beim Verlassen die Regel im selben Moment wie der
+ * `transform` – der Zustand schnappte zurueck. Die dokumentierte Asymmetrie
+ * „schnell herein, schneller hinaus" galt damit nur fuer die Karte, die als
+ * einzige eine eigene Grundtransition hatte.
+ */
+.card, .gate-profile, button.focusable, input.focusable { position: relative; }
+
+.focusable {
+  -webkit-transition: -webkit-transform var(--dauer-fokus-aus) var(--kurve-aus);
+          transition:         transform var(--dauer-fokus-aus) var(--kurve-aus);
+}
+
 .focusable:focus {
   outline: none;
   /* Trennring 4px statt 3: 3px sind bei 55" auf 3 m nur 2,2 Bogenminuten –
@@ -215,10 +275,10 @@ nav { display: -webkit-flex; display: flex; }
   box-shadow: 0 0 0 4px var(--fokus-trenn),
               0 0 0 10px var(--fokus-ring),
               0 6px 18px var(--fokus-schatten);
-  -webkit-transform: scale(1.05); transform: scale(1.05);
-  position: relative; z-index: 5;
-  -webkit-transition: -webkit-transform var(--dauer-ein) var(--kurve-ein);
-          transition:         transform var(--dauer-ein) var(--kurve-ein);
+  -webkit-transform: scale3d(1.05, 1.05, 1); transform: scale3d(1.05, 1.05, 1);
+  z-index: 5;
+  -webkit-transition: -webkit-transform var(--dauer-fokus) var(--kurve-ein);
+          transition:         transform var(--dauer-fokus) var(--kurve-ein);
 }
 
 /*
@@ -232,7 +292,23 @@ nav { display: -webkit-flex; display: flex; }
 
 /* ---------------------------------------------------------- Inhalte ---- */
 
-main { -webkit-flex: 1; flex: 1; overflow-y: auto; padding: 8px 64px 64px; }
+/*
+ * `translateZ(0)` hebt den Inhaltsbereich auf eine eigene Compositor-Ebene.
+ *
+ * Auf dem Geraet gemessen, reiner Bildlauf ueber die Senderliste: 20,3 -> 51,0
+ * fps bei 120 Zeilen, 10,8 -> 42,0 fps bei 720 Zeilen. Beim TASTENWEISEN
+ * Springen – dem, was die App tatsaechlich tut – bleibt der Median gleich, die
+ * Ausreisser ueber 100 ms halbieren sich aber (16/13 auf 7/10 Bilder).
+ *
+ * Die naheliegende Sorge, Blink muesse dafuer die ganze Inhaltshoehe rastern,
+ * hat die Messung widerlegt: Bei einer 96.924 px hohen Ebene blieb RSS
+ * unveraendert (89,6 gegen 77,5 MB) – gerastert werden nur Kacheln nahe dem
+ * Sichtfeld.
+ */
+main {
+  -webkit-flex: 1; flex: 1; overflow-y: auto; padding: 8px 64px 64px;
+  -webkit-transform: translateZ(0); transform: translateZ(0);
+}
 main::-webkit-scrollbar { width: 0; }
 
 .section-title {
@@ -287,17 +363,19 @@ main::-webkit-scrollbar { width: 0; }
   display: inline-block; vertical-align: top;
   width: 232px; margin: 0 24px 28px 0;
   color: #eae7f2; color: var(--text);
-  background: rgba(255, 255, 255, 0.06); background: var(--surface);
-  border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
+  /* Inhaltsstufe: hebt sich vom Grund ab, waehrend Chips und Tabs auf der
+     Umgebungsstufe zuruecktreten. Vorher trugen alle dieselbe Flaeche. */
+  background: rgba(255, 255, 255, 0.06); background: var(--flaeche-inhalt);
+  border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--kante-inhalt);
   border-radius: 16px; overflow: hidden; cursor: pointer; white-space: normal;
   padding-bottom: 12px;   /* Luft unter dem Titel – siehe .card .label */
-  -webkit-transition: -webkit-transform var(--dauer-aus) var(--kurve-aus);
-          transition:         transform var(--dauer-aus) var(--kurve-aus);
+  /* Grundtransition steht jetzt auf `.focusable` – siehe dort. */
   /* `box-shadow: inset` wird UNTER dem Inhalt gemalt – das Poster deckt die
      obere Lichtkante vollstaendig ab. Der Rand dagegen liegt aussen. */
   border-top-color: var(--glas-licht);
   border-bottom-color: var(--glas-schatten);
   box-shadow: 0 14px 30px -10px var(--glas-tief);
+  box-shadow: var(--hebung-2);
 }
 
 /* 2:3-Poster ohne aspect-ratio: Höhe über padding-top (150 % der Breite). */
@@ -322,8 +400,11 @@ main::-webkit-scrollbar { width: 0; }
   object-fit: cover; z-index: 1;
   /* Der Zoom traegt keine Information und darf deshalb langsamer sein –
      das macht den Fokuswechsel „teurer", ohne die Reaktion zu verzoegern. */
-  -webkit-transition: -webkit-transform 260ms var(--kurve-ein);
-          transition:         transform 260ms var(--kurve-ein);
+  /* Hinaus schnell: Die 260 ms galten fuer BEIDE Richtungen, und beim
+     schnellen Durchlaufen blieb eine Schleppe halb gezoomter Poster stehen.
+     Herein darf es dauern – der Zoom traegt keine Information. */
+  -webkit-transition: -webkit-transform 120ms var(--kurve-aus);
+          transition:         transform 120ms var(--kurve-aus);
 }
 
 /*
@@ -366,13 +447,15 @@ main::-webkit-scrollbar { width: 0; }
   display: -webkit-flex; display: flex;
   -webkit-align-items: center; align-items: center;
   padding: 20px 24px; margin-bottom: 12px;
-  background: rgba(255, 255, 255, 0.06); background: var(--surface);
-  border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06); background: var(--flaeche-inhalt);
+  border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--kante-inhalt);
   border-radius: 16px; cursor: pointer; font-size: 22px;
-  -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
   position: relative;
+  /* Bewusst nur die flache Stufe: 30 Zeilen mit 32px-Weichzeichnung sind auf
+     diesem Fernseher messbare Malzeit, ohne dass es besser aussaehe. */
   box-shadow: inset 0 1px 0 var(--glas-licht),
               inset 0 -1px 0 var(--glas-schatten);
+  box-shadow: inset 0 1px 0 var(--glas-licht), var(--hebung-1);
   line-height: 1.4;
 }
 
@@ -547,6 +630,25 @@ main::-webkit-scrollbar { width: 0; }
   -webkit-font-feature-settings: "tnum" 1; font-feature-settings: "tnum" 1;
 }
 
+/*
+ * Suchfelder. Bis hierher gab es fuer `.search` und `.search-wrap` KEINE
+ * einzige Regel – es griff nur `input { width: 100% }`, und heraus kam ein
+ * 1792 px breiter, leerer Riegel mit vier Woertern ganz links. Das war kein
+ * Entwurf, sondern eine Luecke.
+ *
+ * 720 px sind rund 40 Zeichen: Ein Feld ueber die volle Bildbreite verspricht
+ * einen Aufsatz, gesucht werden zwei Woerter.
+ */
+.search-wrap { margin: 0 0 24px; }
+.search {
+  max-width: 720px;
+  padding: 16px 24px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.045); background: var(--surface);
+  border: 1px solid rgba(0, 0, 0, 0.14); border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 var(--glas-licht);
+}
+
 .chip {
   display: inline-block; padding: 12px 24px; margin: 0 12px 12px 0;
   border-radius: 999px; font-size: 22px; white-space: nowrap; cursor: pointer;
@@ -589,9 +691,14 @@ main::-webkit-scrollbar { width: 0; }
 
 .detail-head { position: relative; margin-bottom: 24px; }
 .detail-backdrop {
-  /* 32 % -> 42 %: Das Bild traegt jetzt Titel und Metazeile und braucht die
-     Hoehe. Der Verlauf blendet es nach unten in den Seitengrund. */
-  position: relative; width: 100%; height: 0; padding-top: 42%;
+  /* 32 % -> 42 % -> 34 %.
+     Nachgerechnet, warum zurueck: Kopfleiste 130 + Innenabstand 8 +
+     Zurueck-Knopf 79 + Backdrop (42 % von 1792 = 753) + Rand 24 = 994 px.
+     Dort begann die Knopfzeile, ihre Unterkante lag bei 1057 von 1080 – und
+     die Inhaltsangabe bei 1073, also AUSSERHALB des Bildes. Mit 34 % (609 px)
+     endet die Knopfzeile bei 913, und es bleiben rund 140 px fuer die
+     Inhaltsangabe im sichtbaren Bereich. */
+  position: relative; width: 100%; height: 0; padding-top: 34%;
   overflow: hidden; border-radius: 20px;
   background: rgba(255, 255, 255, 0.12); background: var(--surface-strong);
 }
@@ -616,8 +723,12 @@ main::-webkit-scrollbar { width: 0; }
   line-height: 1.15;
   /* Grosse Schrift laeuft von Natur aus zu weit – enger stellen. */
   letter-spacing: -0.015em;
-  /* Der Verlauf reicht auf hellen Bildern nicht immer: Ein weicher Schatten
-     haelt den Titel auch ueber einem hellen Himmel lesbar. */
+  /* Der Verlauf reicht auf unruhigen Bildern nicht immer. Der Halo stand hier
+     bisher nur als Absichtserklaerung im Kommentar – die Regel enthielt ihn
+     nicht. Auf dunklen Designs traegt ein dunkler Schatten unter heller
+     Schrift, auf hellen ein heller unter dunkler; applyTheme() setzt ihn. */
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+  text-shadow: var(--titel-halo);
 }
 .detail-meta { font-size: 22px; color: #a9a4bd; color: var(--text-dim); margin-bottom: 16px;
   line-height: 1.45;
@@ -842,7 +953,6 @@ button.ghost {
 .gate-profile {
   display: inline-block; vertical-align: top; margin: 0 24px;
   padding: 20px; border-radius: 20px; cursor: pointer;
-  -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
 }
 
 /*
@@ -968,11 +1078,28 @@ body.zeiger .focusable:focus {
 .card.focusable:focus .poster img {
   -webkit-transform: scale3d(1.06, 1.06, 1);
           transform: scale3d(1.06, 1.06, 1);
+  -webkit-transition: -webkit-transform var(--dauer-zier) var(--kurve-ein);
+          transition:         transform var(--dauer-zier) var(--kurve-ein);
 }
 /* Senderlogos sind `object-fit: contain` mit Innenabstand – ein Zoom saehe
    dort nach Verrutschen aus. */
 .card.wide.focusable:focus .poster img {
   -webkit-transform: none; transform: none;
+}
+
+/*
+ * Durchscrollen: Zierwerk aussetzen, Ortsangabe niemals.
+ *
+ * Bei 100–130 ms Tastenwiederholung sieht man vom 220-ms-Posterzoom nichts –
+ * bezahlt wird er trotzdem: Jeder Uebergangsstart legt eine Compositor-Ebene
+ * an, malt sie und verwirft sie beim naechsten Tastendruck. Zehnmal je
+ * Sekunde ist das der groesste Posten der Navigation. Ring und Anhebung
+ * bleiben: Sie sagen „hier stehst du" und muessen gerade beim schnellen
+ * Durchlaufen stimmen.
+ */
+body.eilig .poster img,
+body.eilig .card.focusable:focus .poster img {
+  -webkit-transition: none; transition: none;
 }
 
 /* Kleine Bedienelemente wachsen nur leicht: Der Ring traegt die Aussage. */
@@ -987,7 +1114,16 @@ body.zeiger .focusable:focus {
  * Auf einem Geraet, das 200–600 ms zum Neuaufbau braucht, ist das die
  * einzige sofortige Rueckmeldung auf einen Tastendruck.
  */
-.focusable.gedrueckt, .focusable:active {
+/*
+ * Die doppelte Klasse hebt die Spezifitaet auf (0,4,0) – gerade so ueber
+ * `.chip.focusable:focus`, `.channel.focusable:focus { transform: none }` und
+ * `body.zeiger .focusable:focus`. Ohne das gewann ueberall der Fokus, und der
+ * Druckzustand war ausser auf Karten UNSICHTBAR: auf Chips, Tabs, Knoepfen und
+ * ausgerechnet auf der Senderzeile, der meistbenutzten Liste der App. Der Ring
+ * wechselte, die Bewegung nicht – die „einzige sofortige Rueckmeldung" fiel
+ * genau dort aus, wo sie am meisten gebraucht wird.
+ */
+.focusable.focusable.gedrueckt, .focusable.focusable:active {
   box-shadow: 0 0 0 3px var(--fokus-trenn),
               0 0 0 8px var(--fokus-ring),
               0 2px 6px var(--fokus-schatten);
@@ -995,7 +1131,13 @@ body.zeiger .focusable:focus {
           transform: scale3d(0.97, 0.97, 1);
   -webkit-transition-duration: 60ms; transition-duration: 60ms;
 }
-.card.focusable.gedrueckt {
+/* Breite Elemente duerfen nicht schrumpfen (dieselbe Begruendung wie beim
+   Fokusring: 5 % von 1792 px ragen ueber den Rand). Sie nicken stattdessen. */
+.channel.focusable.focusable.gedrueckt, .channel.focusable.focusable:active,
+input.focusable.focusable:active, .search.focusable.focusable:active {
+  -webkit-transform: translate3d(0, 1px, 0); transform: translate3d(0, 1px, 0);
+}
+.card.focusable.focusable.gedrueckt, .card.focusable.focusable:active {
   -webkit-transform: translate3d(0, -1px, 0) scale3d(0.985, 0.985, 1);
           transform: translate3d(0, -1px, 0) scale3d(0.985, 0.985, 1);
 }
@@ -1003,34 +1145,27 @@ body.zeiger .focusable:focus {
 /* Seitenwechsel: nur ueberblenden, nicht schieben. Ein Chip-Klick baut
    dieselbe Seite neu auf – eine Bewegung dort liest sich als Flackern. */
 #content.wechsel {
-  -webkit-animation: einblenden 140ms var(--kurve-ein) both;
-          animation: einblenden 140ms var(--kurve-ein) both;
+  /* Ohne `both`: Bliebe die Klasse durch einen verpassten Aufraeumschritt
+     stehen, waere der Inhalt mit `both` dauerhaft auf `opacity: 0` – ein
+     schwarzer Bildschirm statt eines fehlenden Effekts.
+     120 statt 140 ms: `#content` IST der Scroller; eine Deckkraft darauf
+     zwingt Blink, die Scroll-Inhaltsebene ueber die volle Hoehe zu promoten.
+     Nur `opacity`, kein `transform` – ein Schub kaeme ohnehin erst nach den
+     200–600 ms Aufbauzeit und laese sich als Stolpern. */
+  -webkit-animation: einblenden 120ms var(--kurve-ein);
+          animation: einblenden 120ms var(--kurve-ein);
 }
 @-webkit-keyframes einblenden { from { opacity: 0; } to { opacity: 1; } }
 @keyframes einblenden { from { opacity: 0; } to { opacity: 1; } }
 
 /*
- * „Bewegung reduzieren". `prefers-reduced-motion` gibt es erst ab Chrome 74 –
- * auf webOS 4 ist die Abfrage wirkungslos, deshalb zusaetzlich ein Schalter
- * in den Einstellungen.
+ * Frueher standen hier `body.ruhig` und ein `@media (prefers-reduced-motion)`.
+ * Beide waren wirkungslos: Die Klasse `ruhig` hat nie jemand gesetzt (es gibt
+ * die Einstellung nicht, die der Kommentar versprach), und
+ * `prefers-reduced-motion` kennt Chromium 53 nicht – der ganze Block wurde
+ * verworfen. Wer Bewegung wirklich abschaltbar machen will, braucht zuerst
+ * den Schalter in den Einstellungen.
  */
-body.ruhig *, body.ruhig *:before, body.ruhig *:after {
-  -webkit-transition: none !important; transition: none !important;
-  -webkit-animation-duration: 1ms !important; animation-duration: 1ms !important;
-}
-body.ruhig .spinner {
-  -webkit-animation: spin 900ms linear infinite !important;
-          animation: spin 900ms linear infinite !important;
-}
-@media (prefers-reduced-motion: reduce) {
-  *, *:before, *:after {
-    -webkit-transition: none !important; transition: none !important;
-    -webkit-animation-duration: 1ms !important; animation-duration: 1ms !important;
-  }
-  .spinner {
-    -webkit-animation: spin 900ms linear infinite !important;
-            animation: spin 900ms linear infinite !important;
-  }
 }
 
 
