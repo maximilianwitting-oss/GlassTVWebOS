@@ -1,10 +1,10 @@
 # Release und Einreichung
 
-Stand: 1.18.0, gebaut und auf einem LG OLED77C9PLA (webOS 4.10) geprüft.
+Stand: 1.19.0, gebaut und auf einem LG OLED77C9PLA (webOS 4.10) geprüft.
 
 ## Was fertig ist
 
-Das Paket `de.app.glasstv_1.18.0_all.ipk` ist gebaut, installiert und
+Das Paket `de.app.glasstv_1.19.0_all.ipk` ist gebaut, installiert und
 läuft. Technisch ist die App einreichbereit:
 
 | Punkt | Stand |
@@ -17,7 +17,7 @@ läuft. Technisch ist die App einreichbereit:
 | Auflösung 1920×1080 | ja |
 | Fehlerfall falsche Zugangsdaten | klare Meldung, führt zurück zur Einrichtung |
 | Debug-Reste im Code | keine |
-| Tests | 55 Core + 16 UI, alle grün |
+| Tests | 59 Core + 16 UI, alle grün |
 
 ## Was noch fehlt – und nur du erledigen kannst
 

@@ -1,5 +1,59 @@
 # Änderungen
 
+## 1.19.0
+
+**Zurückschauen (Catch-up).** `tv_archive_duration` kam von jedem Panel mit und
+wurde bis hierher nie gelesen: Auf diesem Anschluss haben **699 von 42.907
+Sendern ein Drei-Tage-Archiv**, an das die App nicht herankam. Sender mit
+Rückblick tragen jetzt einen Knopf „Archiv" in der Zeile — in der Senderliste,
+in den Suchtreffern und im Programmführer. Dahinter liegt die Liste der
+verfügbaren Sendungen, nach Tagen gegliedert („Heute", „Gestern", „Freitag,
+4. 9."), mit Uhrzeit, Titel, Laufzeit und Beschreibung.
+
+Der Knopf steht in der Zeile und nicht hinter einer Farbtaste, weil alle vier
+Farbtasten belegt sind — und weil man ihn so sieht, statt ihn zu kennen. Die
+Hauptgeste bleibt unverändert: OK spielt live.
+
+Drei Dinge, die sich erst am Gerät zeigten:
+
+*Die Adresse.* Panels teilen sich in zwei Lager, `/timeshift/…` und das ältere
+`streaming/timeshift.php`. Welches der eigene Anbieter bedient, sagt keine
+Abfrage — hier antwortet der Pfad mit HTTP 200 und einer gültigen Playlist,
+das PHP läuft in die Zeitüberschreitung. Scheitert die erste Adresse, versucht
+der Player genau einmal die zweite.
+
+*Die Länge.* Das Panel baut die Wiedergabeliste linear auf. Gemessen, derselbe
+Sender und Startzeitpunkt: 60 Minuten → HTTP 200 nach 5,4 s, 240 Minuten →
+17,5 s, 720 Minuten → Zeitüberschreitung. Die 720 stammen nicht aus einer
+Sendung, sondern aus den „Sendepause"-Blöcken, mit denen Panels ihre EPG-Lücken
+füllen. Ohne Deckel liefen genau die in einen schwarzen Bildschirm, obwohl die
+Aufnahme da ist. Angefordert werden jetzt höchstens 180 Minuten; steht mehr in
+der Liste, sagt der Player „erste 3 Std." dazu.
+
+*Das Spulen.* Die Wiedergabelisten haben `#EXT-X-TARGETDURATION:60`, und webOS
+setzt jeden Sprung auf eine Segmentgrenze. Gemessen am selben Stream: von 49 s
+um +10 s landete bei **3 s** — der Sprung blieb im selben Segment und warf einen
+an dessen Anfang. Wer vorspulen wollte, landete am Anfang. Archivaufnahmen
+springen deshalb in Zwei-Minuten-Schritten (+60 s und +120 s greifen sauber);
+Filme und Serien bleiben bei zehn Sekunden.
+
+Zeitzonen werden nirgends geraten: Die Anzeige rechnet mit `start_timestamp`,
+die Adresse übernimmt das Textfeld `start` wörtlich — es steht in der Ortszeit
+des Panels, und jede Umrechnung wäre eine Vermutung über den Anbieter.
+Base64-Titel werden als UTF-8 gelesen, sonst würde aus „Grüße aus Köln"
+Kauderwelsch.
+
+Archiveinträge stehen bewusst **nicht** unter „Weiterschauen": Das Zeitfenster
+des Anbieters wandert täglich weiter, eine gemerkte Position zeigte nach ein
+paar Tagen auf eine gelöschte Adresse. In der Statistik zählen sie als
+Fernsehen, nicht als Film.
+
+Eine Einschränkung, die zu diesem Anschluss gehört: Von den 699 Archivsendern
+überleben **96 den Sprachfilter „Deutsch"** — die übrigen liegen in UK-, NL-
+und GR-Rubriken. Wer mehr will, schaltet in den Einstellungen weitere Sprachen
+zu.
+
+
 ## 1.18.0
 
 **Die Suche liefert jetzt die besten Treffer, nicht die ersten.** Sie nahm die

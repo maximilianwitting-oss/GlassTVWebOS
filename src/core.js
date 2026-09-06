@@ -386,6 +386,166 @@
       encodeURIComponent(pass) + '/' + sid + '.' + endung;
   }
 
+  /**
+   * Adresse einer Archivaufnahme („Catch-up"/Timeshift).
+   *
+   * Xtream-Panels legen den Rueckblick unter einem eigenen Pfad ab, NICHT
+   * unter `/live/`. Der Zeitpunkt steht darin in der Ortszeit des Panels, die
+   * nicht die des Fernsehers sein muss – deshalb wird er nie selbst gerechnet,
+   * sondern woertlich aus `get_simple_data_table` uebernommen (Feld `start`).
+   * Jede Umrechnung waere eine Vermutung ueber die Zeitzone des Anbieters.
+   *
+   * `start` hat die Form `JJJJ-MM-TT:HH-MM`, `minuten` ist die Laufzeit.
+   */
+  function xtreamTimeshiftUrl(host, user, pass, minuten, start, sid) {
+    return host + '/timeshift/' + encodeURIComponent(user) + '/' +
+      encodeURIComponent(pass) + '/' + minuten + '/' + start + '/' + sid + '.m3u8';
+  }
+
+  /** Aeltere Panels kennen nur diesen Weg – als Ausweichadresse. */
+  function xtreamTimeshiftUrlAlt(host, user, pass, minuten, start, sid) {
+    return host + '/streaming/timeshift.php?username=' + encodeURIComponent(user) +
+      '&password=' + encodeURIComponent(pass) + '&stream=' + sid +
+      '&start=' + encodeURIComponent(start) + '&duration=' + minuten;
+  }
+
+  /** `2026-09-06 20:15:00` → `2026-09-06:20-15` (Form, die der Pfad braucht). */
+  function timeshiftZeit(panelZeit) {
+    var m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/.exec(String(panelZeit || ''));
+    return m ? m[1] + ':' + m[2] + '-' + m[3] : null;
+  }
+
+  /**
+   * Base64 mit UTF-8-Inhalt entschluesseln.
+   *
+   * `get_simple_data_table` liefert Titel und Beschreibung base64-kodiert.
+   * Eigene Umsetzung statt `atob`, damit dieselbe Funktion auch im Test ohne
+   * Browser laeuft – und `atob` allein gaebe ohnehin Bytes zurueck, aus denen
+   * „Tatort: Wehrlos" ohne UTF-8-Schritt als „TatortÂ Wehrlos" herauskaeme.
+   */
+  var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  function base64Text(roh) {
+    var s = String(roh || '').replace(/[^A-Za-z0-9+/=]/g, '');
+    if (!s) return '';
+    var bytes = [], puffer = 0, bits = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (c === '=') break;
+      var w = B64.indexOf(c);
+      if (w < 0) continue;
+      puffer = (puffer << 6) | w;
+      bits += 6;
+      if (bits >= 8) { bits -= 8; bytes.push((puffer >> bits) & 255); }
+    }
+    return utf8Text(bytes);
+  }
+
+  /** Bytefolge als UTF-8 lesen (ungueltige Folgen werden uebersprungen). */
+  function utf8Text(bytes) {
+    var out = '', i = 0;
+    while (i < bytes.length) {
+      var b = bytes[i++];
+      if (b < 0x80) { out += String.fromCharCode(b); continue; }
+      var zahl = -1, weitere = 0;
+      if (b >= 0xC0 && b < 0xE0) { zahl = b & 0x1F; weitere = 1; }
+      else if (b >= 0xE0 && b < 0xF0) { zahl = b & 0x0F; weitere = 2; }
+      else if (b >= 0xF0 && b < 0xF8) { zahl = b & 0x07; weitere = 3; }
+      else continue;                                  // Folgebyte ohne Anfang
+      if (i + weitere > bytes.length) break;
+      for (var k = 0; k < weitere; k++) {
+        var f = bytes[i++];
+        if ((f & 0xC0) !== 0x80) { zahl = -1; break; }
+        zahl = (zahl << 6) | (f & 0x3F);
+      }
+      if (zahl < 0) continue;
+      if (zahl > 0xFFFF) {
+        zahl -= 0x10000;
+        out += String.fromCharCode(0xD800 + (zahl >> 10), 0xDC00 + (zahl & 0x3FF));
+      } else out += String.fromCharCode(zahl);
+    }
+    return out;
+  }
+
+  /**
+   * Archivierbare Sendungen eines Senders aus `get_simple_data_table`.
+   *
+   * Behalten wird nur, was das Panel selbst als archiviert meldet
+   * (`has_archive`), was in der Vergangenheit liegt und was noch innerhalb der
+   * Archivdauer des Senders ist. Ohne die letzte Pruefung stuenden Sendungen
+   * in der Liste, die der Server laengst geloescht hat – man waehlt sie aus
+   * und bekommt einen schwarzen Bildschirm.
+   *
+   * Zeiten kommen aus `start_timestamp`/`stop_timestamp` (echte Unix-Sekunden,
+   * damit die Anzeige zur uebrigen App passt), die Adresse dagegen aus dem
+   * Textfeld `start` – das steht in der Ortszeit des Panels und darf nicht
+   * umgerechnet werden.
+   */
+  /**
+   * Obergrenze fuer die angeforderte Laenge einer Archivaufnahme.
+   *
+   * Das Panel baut die Wiedergabeliste linear auf – auf dem Geraet gemessen,
+   * derselbe Sender und Startzeitpunkt:
+   *
+   *     60 Minuten   ->  HTTP 200 nach  5,4 s   (6 KB)
+   *    240 Minuten   ->  HTTP 200 nach 17,5 s  (25 KB)
+   *    720 Minuten   ->  Zeitueberschreitung
+   *
+   * Die 720 stammen nicht aus einer echten Sendung, sondern aus den
+   * „Sendepause"-Bloecken, mit denen viele Panels ihre EPG-Luecken fuellen.
+   * Ohne Deckel liefen genau diese Eintraege in einen schwarzen Bildschirm,
+   * obwohl die Aufnahme vorhanden ist: mit 60 Minuten Anforderung spielte
+   * derselbe Zeitpunkt einwandfrei.
+   *
+   * 180 Minuten decken jede reale Sendung samt Spielfilm ab und halten die
+   * Wartezeit unter dem 30-Sekunden-Limit des Players.
+   */
+  var ARCHIV_MAX_MINUTEN = 180;
+
+  function parseArchivListe(json, archivTage, jetzt) {
+    var out = [];
+    var liste = json && (json.epg_listings || json.epg_listing || json.js);
+    if (!liste || !liste.length) return out;
+    jetzt = jetzt || Date.now();
+    var grenze = archivTage > 0 ? jetzt - archivTage * 86400000 : null;
+
+    for (var i = 0; i < liste.length; i++) {
+      var e = liste[i];
+      if (!e || typeof e !== 'object') continue;
+      // `has_archive` kommt mal als 1, mal als "1" – beides gilt.
+      var hat = e.has_archive;
+      if (!(hat === 1 || hat === '1' || hat === true)) continue;
+
+      var start = num(e.start_timestamp);
+      var stop = num(e.stop_timestamp);
+      if (start === null || stop === null || stop <= start) continue;
+      start *= 1000; stop *= 1000;
+      if (start >= jetzt) continue;                 // laeuft noch oder kommt erst
+      if (grenze !== null && start < grenze) continue;   // vom Server geloescht
+
+      var zeit = timeshiftZeit(e.start);
+      if (!zeit) continue;                          // ohne Startzeit keine Adresse
+
+      var minuten = Math.max(1, Math.round((stop - start) / 60000));
+      out.push({
+        title: base64Text(e.title) || '(ohne Titel)',
+        desc: base64Text(e.description) || null,
+        start: start,
+        end: stop,
+        // Fuer die Adresse: woertliche Panel-Ortszeit und Laufzeit in Minuten.
+        panelStart: zeit,
+        minuten: minuten,
+        // Was tatsaechlich angefordert wird – siehe ARCHIV_MAX_MINUTEN.
+        abrufMinuten: Math.min(minuten, ARCHIV_MAX_MINUTEN),
+      });
+    }
+    // Neueste zuerst – danach sucht man beim Zurueckschauen. Zweitschluessel,
+    // weil `Array#sort` auf Chromium 53 nicht stabil ist.
+    for (var p = 0; p < out.length; p++) out[p]._p = p;
+    out.sort(function (a, b) { return b.start - a.start || a._p - b._p; });
+    for (var q = 0; q < out.length; q++) delete out[q]._p;
+    return out;
+  }
+
   function parseLiveStreams(json, categories, host, user, pass, sourceID) {
     var out = [];
     if (!json || !json.length) return out;
@@ -1148,6 +1308,12 @@
     sanitizedHost: sanitizedHost,
     xtreamApi: xtreamApi,
     xtreamStreamUrl: xtreamStreamUrl,
+    xtreamTimeshiftUrl: xtreamTimeshiftUrl,
+    xtreamTimeshiftUrlAlt: xtreamTimeshiftUrlAlt,
+    timeshiftZeit: timeshiftZeit,
+    base64Text: base64Text,
+    parseArchivListe: parseArchivListe,
+    ARCHIV_MAX_MINUTEN: ARCHIV_MAX_MINUTEN,
     parseCategories: parseCategories,
     parseLiveStreams: parseLiveStreams,
     parseVodStreams: parseVodStreams,

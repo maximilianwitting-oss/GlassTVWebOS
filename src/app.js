@@ -37,6 +37,7 @@
     katWahl: { movies: null, series: null },
     katSuche: { m: '', s: '' },
     setupEingabe: null,     // Getipptes im Einrichtungsformular
+    archiv: {},             // Senderkennung -> Archivliste (einmal je Sitzung geholt)
     guideSuche: '',         // Filter im Programmfuehrer
     guideLimit: 100,        // wie viele Sender dort gezeigt werden
     authFehler: null,       // haelt den Einrichtungsbildschirm offen
@@ -656,7 +657,13 @@
 
   function resumable() {
     return progressList().filter(function (p) {
-      return p.kind !== 'live' && p.duration > 0 &&
+      /*
+       * Archiveintraege bleiben draussen: Das Zeitfenster des Anbieters wandert
+       * taeglich weiter, und eine gemerkte Position zeigte nach ein paar Tagen
+       * auf eine Adresse, die der Server geloescht hat. In „Weiterschauen"
+       * staenden dann Kacheln, die verlaesslich ins Schwarze fuehren.
+       */
+      return p.kind !== 'live' && p.kind !== 'catchup' && p.duration > 0 &&
         p.position > 30 && (p.position / p.duration) < 0.95;
     });
   }
@@ -1462,7 +1469,8 @@
       var key = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
       dayCounts[key] = (dayCounts[key] || 0) + 1;
       if (e.group) groupCounts[e.group] = (groupCounts[e.group] || 0) + 1;
-      if (e.kind === 'live') { out.channels++; continue; }
+      // Zurueckgeschautes zaehlt als Fernsehen, nicht als Film.
+      if (e.kind === 'live' || e.kind === 'catchup') { out.channels++; continue; }
       // Position bei bekannter Laufzeit deckeln – Rundungsreste sonst darüber.
       var secs = e.duration > 0 ? Math.min(e.position, e.duration) : e.position;
       out.vodSeconds += secs;
@@ -1841,6 +1849,7 @@
       else if (state.view.type === 'search') renderSearch();
       else if (state.view.type === 'settings') renderSettings();
       else if (state.view.type === 'stats') renderStats();
+      else if (state.view.type === 'archiv') renderArchiv(state.view.channel);
     } else if (state.tab === 'home') renderHome();
     else if (state.tab === 'live') renderChannels();
     else if (state.tab === 'movies') renderMovies();
@@ -2273,6 +2282,8 @@
 
     if (isFavorite(ch.id)) row.appendChild(element('span', 'badge-fav', '★'));
     if (now) row.appendChild(element('span', 'badge-live', 'LIVE'));
+    var archiv = archivKnopf(ch);
+    if (archiv) row.appendChild(archiv);
 
     row.onclick = function () { playChannel(ch); };
     // Lange OK-Taste ist auf der Fernbedienung unzuverlässig – Favorit über
@@ -3220,6 +3231,156 @@
 
   // ---- Programmführer ----
 
+  // ---- Zurueckschauen (Catch-up) ----
+
+  /**
+   * Knopf „Archiv" in einer Senderzeile – nur, wenn der Sender wirklich einen
+   * Rueckblick hat.
+   *
+   * `tv_archive_duration` kam von jedem Panel mit und wurde bis hierher nie
+   * gelesen: Auf diesem Anschluss haben Sender ein mehrtaegiges Archiv, an das
+   * die App nicht herankam. Der Knopf steht in der Zeile und nicht hinter
+   * einer Farbtaste, weil alle vier Farbtasten schon belegt sind – und weil
+   * man ihn so sieht, statt ihn zu kennen.
+   */
+  function archivKnopf(ch) {
+    if (!ch || !(ch.archiveDays > 0)) return null;
+    // Der Rueckblick laeuft ueber Xtream-Pfade; eine M3U-Playlist kennt ihn nicht.
+    if (!state.source || state.source.kind !== 'xtream' || !ch.sid) return null;
+    var b = element('button', 'archiv-knopf focusable', 'Archiv');
+    b.setAttribute('data-fkey', 'archiv:' + ch.id);
+    b.onclick = function (ev) {
+      // Ohne das Stoppen loeste der Klick zusaetzlich die Zeile aus und der
+      // Sender lief live los, waehrend die Archivliste aufging.
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      openArchiv(ch);
+    };
+    return b;
+  }
+
+  function openArchiv(ch) {
+    state.view = { type: 'archiv', channel: ch, zurueck: vorherigeAnsicht() };
+    var vorhanden = state.archiv[ch.id];
+    if (vorhanden) { render(); return; }
+
+    state.loading = true;
+    state.loadingStep = 'Archiv wird geladen …';
+    render();
+    var src = state.source;
+    var url = Core.xtreamApi(src.host, src.user, src.pass, 'get_simple_data_table',
+      { stream_id: ch.sid });
+    httpGetJson(url, function (err, json) {
+      state.loading = false;
+      state.loadingStep = null;
+      if (err || !json) {
+        toast('Das Archiv kam nicht an' + (err ? ' (' + err.message + ')' : '') +
+          '. Prüfe die Internetverbindung und versuch es noch einmal.', 8000);
+        render();
+        return;
+      }
+      var liste;
+      try {
+        liste = Core.parseArchivListe(json, ch.archiveDays, Date.now());
+      } catch (e) {
+        liste = [];
+      }
+      // Auch die leere Liste merken: Ein Sender, der nichts aufhebt, soll
+      // nicht bei jedem Oeffnen erneut abgefragt werden.
+      state.archiv[ch.id] = liste;
+      render();
+    }, 30000);
+  }
+
+  function renderArchiv(ch) {
+    el.content.appendChild(backButton());
+    var liste = state.archiv[ch.id];
+
+    el.content.appendChild(element('div', 'section-title',
+      ch.name + ' · Zurückschauen'));
+    el.content.appendChild(element('div', 'detail-meta',
+      'Dieser Sender hebt die letzten ' + ch.archiveDays +
+      (ch.archiveDays === 1 ? ' Tag' : ' Tage') + ' auf.'));
+
+    if (!liste) return;          // laedt noch, der Spinner steht darueber
+    if (!liste.length) {
+      el.content.appendChild(element('div', 'detail-meta',
+        'Der Anbieter meldet für diesen Sender gerade keine abrufbaren ' +
+        'Sendungen. Das kann sich im Lauf des Tages ändern.'));
+      return;
+    }
+
+    var box = document.createElement('div');
+    var letzterTag = null;
+    for (var i = 0; i < liste.length; i++) {
+      (function (e) {
+        // Tagesueberschrift: Bei mehreren Tagen Archiv ist „20:15" allein
+        // nicht genug, um zu wissen, welchen Abend man vor sich hat.
+        var d = new Date(e.start);
+        var tag = tagesText(d);
+        if (tag !== letzterTag) {
+          letzterTag = tag;
+          box.appendChild(element('div', 'archiv-tag', tag));
+        }
+
+        var row = element('div', 'channel focusable');
+        row.tabIndex = 0;
+        row.setAttribute('data-fkey', 'arch:' + e.start);
+        row.appendChild(element('div', 'archiv-zeit',
+          timeText(d) + '–' + timeText(new Date(e.end))));
+        var info = element('div', 'info');
+        info.appendChild(element('div', 'name', e.title));
+        info.appendChild(element('div', 'sub',
+          e.minuten + ' Min.' + (e.desc ? '   ·   ' + e.desc : '')));
+        row.appendChild(info);
+        row.onclick = function () { playArchiv(ch, e); };
+        box.appendChild(row);
+      })(liste[i]);
+    }
+    el.content.appendChild(box);
+  }
+
+  /** „Heute", „Gestern" oder ein Datum – Uhrzeit allein reicht hier nicht. */
+  function tagesText(d) {
+    var heute = new Date();
+    heute.setHours(0, 0, 0, 0);
+    var tag = new Date(d.getTime());
+    tag.setHours(0, 0, 0, 0);
+    var diff = Math.round((heute - tag) / 86400000);
+    if (diff === 0) return 'Heute';
+    if (diff === 1) return 'Gestern';
+    var WOCHE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag',
+      'Freitag', 'Samstag'];
+    return WOCHE[d.getDay()] + ', ' + d.getDate() + '. ' + (d.getMonth() + 1) + '.';
+  }
+
+  function playArchiv(ch, e) {
+    var src = state.source;
+    if (!src || src.kind !== 'xtream') return;
+    var url = Core.xtreamTimeshiftUrl(src.host, src.user, src.pass,
+      e.abrufMinuten, e.panelStart, ch.sid);
+    var d = new Date(e.start);
+    /*
+     * Bei gedeckelter Laenge sagen, was kommt: Der Nutzer hat einen
+     * Zwoelf-Stunden-Block gewaehlt und bekommt drei Stunden ab dessen Beginn.
+     * Ohne den Zusatz sieht das aus, als breche die Aufnahme grundlos ab.
+     */
+    var zusatz = e.abrufMinuten < e.minuten
+      ? ' · erste ' + Math.round(e.abrufMinuten / 60) + ' Std.' : '';
+    playItem(e.title, url,
+      ch.name + ' · ' + tagesText(d) + ' ' + timeText(d) + zusatz,
+      'catchup', ch.id + '|archiv|' + e.start, 0,
+      { channel: ch }, { image: ch.logoURL, group: ch.group });
+    /*
+     * Ausweichadresse hinterlegen: Panels teilen sich in zwei Lager – der
+     * Pfad `/timeshift/…` und das aeltere `streaming/timeshift.php`. Welches
+     * Lager der eigene Anbieter bedient, laesst sich nicht abfragen; ohne den
+     * zweiten Versuch waere Zurueckschauen bei der Haelfte aller Panels
+     * einfach eine Fehlermeldung.
+     */
+    player.ausweichUrl = Core.xtreamTimeshiftUrlAlt(src.host, src.user, src.pass,
+      e.abrufMinuten, e.panelStart, ch.sid);
+  }
+
   function renderGuide() {
     el.content.appendChild(backButton());
     var withEpg = state.library.channels.filter(function (c) {
@@ -3288,6 +3449,8 @@
           info.appendChild(element('div', 'sub', 'danach ' + timeText(next.start) + '   ' + next.title));
         }
         row.appendChild(info);
+        var gArchiv = archivKnopf(ch);
+        if (gArchiv) row.appendChild(gArchiv);
         row.onclick = function () { playChannel(ch); };
         row._favTarget = ch.id; row._favItem = ch;
         box.appendChild(row);
@@ -4304,6 +4467,9 @@
 
     player.subtitle = subtitle || '';
     player.sourceUrl = url;
+    // Zuruecksetzen, sonst zieht die Ausweichadresse des zuletzt gespielten
+    // Archiveintrags bei einem ganz anderen Titel.
+    player.ausweichUrl = null;
     player.lastSaved = undefined;
     el.playerTitle.textContent = title;
     el.playerSub.textContent = subtitle || '';
@@ -4327,7 +4493,9 @@
     if (hint) {
       hint.textContent = kind === 'live'
         ? 'OK = Pause · ◀ ▶ = Sender wechseln · Zurück = schließen'
-        : 'OK = Pause · ◀ ▶ = 10 s spulen · Zurück = schließen';
+        : (kind === 'catchup'
+          ? 'OK = Pause · ◀ ▶ = 2 Min. spulen · Zurück = schließen'
+          : 'OK = Pause · ◀ ▶ = 10 s spulen · Zurück = schließen');
     }
 
     el.video.src = url;
@@ -4487,6 +4655,25 @@
   }
 
   /** Spulen, begrenzt auf die tatsächliche Länge (sonst wirft die Pipeline). */
+  /**
+   * Sprungweite der Pfeiltasten.
+   *
+   * Bei Archivaufnahmen sind das zwei Minuten statt zehn Sekunden – nicht aus
+   * Geschmack, sondern weil es anders nicht geht: Die Wiedergabelisten des
+   * Panels haben `#EXT-X-TARGETDURATION:60`, und webOS setzt einen Sprung
+   * immer auf eine Segmentgrenze. Auf dem Geraet gemessen, derselbe Stream:
+   *
+   *   von  49 s  um  +10 s  ->  landete bei    3 s   (Segment neu geladen)
+   *   von 607 s  um  +60 s  ->  landete bei  665 s
+   *   von 631 s  um +120 s  ->  landete bei  727 s
+   *
+   * Zehn Sekunden bleiben im selben Segment, und der Sprung warf einen an
+   * dessen Anfang zurueck: Wer vorspulen wollte, landete am Anfang.
+   */
+  function sprungWeite() {
+    return player.kind === 'catchup' ? 120 : 10;
+  }
+
   function seekBy(seconds) {
     var dur = el.video.duration;
     var ziel = (el.video.currentTime || 0) + seconds;
@@ -4572,11 +4759,11 @@
         e.preventDefault(); return;
       }
       if (code === 39 || code === 417) {
-        if (player.kind === 'live') zap(1); else seekBy(10);
+        if (player.kind === 'live') zap(1); else seekBy(sprungWeite());
         e.preventDefault(); return;
       }
       if (code === 37 || code === 412) {
-        if (player.kind === 'live') zap(-1); else seekBy(-10);
+        if (player.kind === 'live') zap(-1); else seekBy(-sprungWeite());
         e.preventDefault(); return;
       }
       if (code === 38) { if (player.kind === 'live') zap(-1); e.preventDefault(); return; }
@@ -4880,6 +5067,24 @@
        * mitten in der Liste.
        */
       if (!player.open) return;
+      /*
+       * Genau ein zweiter Versuch, wenn eine Ausweichadresse hinterlegt ist –
+       * beim Zurueckschauen bedienen Panels entweder `/timeshift/…` oder das
+       * aeltere `streaming/timeshift.php`, und welches, sagt keine Abfrage.
+       * Die Adresse wird dabei geleert, damit aus dem Ausweichen keine
+       * Endlosschleife zwischen zwei fehlschlagenden Adressen wird.
+       */
+      if (player.ausweichUrl) {
+        var zweit = player.ausweichUrl;
+        player.ausweichUrl = null;
+        player.sourceUrl = zweit;
+        el.playerSub.textContent = 'Wird geladen …';
+        el.video.src = zweit;
+        el.video.load();
+        var wieder = el.video.play();
+        if (wieder && wieder.catch) wieder.catch(function () {});
+        return;
+      }
       // Ohne Schließen bliebe ein schwarzes Vollbild stehen, dessen Bedienhinweis
       // nach vier Sekunden ausgeblendet ist.
       toast('Dieser Stream lässt sich auf dem Fernseher nicht abspielen.', 8000);
