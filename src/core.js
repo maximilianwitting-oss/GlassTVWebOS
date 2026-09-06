@@ -659,8 +659,22 @@
    * Sicherheitsnetz: ist in einer Liste GAR KEINE Sprache erkennbar (Anbieter
    * ohne Kürzel), bleibt sie ungefiltert – sonst verschwände alles.
    */
-  function filterByLanguage(playlist, preferred, strict) {
+  /**
+   * Bibliothek auf bevorzugte Sprachen filtern.
+   *
+   * `modus` steuert, wie streng das geschieht:
+   *   'grosszuegig' – alles Passende plus alles, was keine Sprache preisgibt
+   *   'ausgewogen'  – Kategorien mit erkennbarer Sprache werden gefiltert,
+   *                   neutrale Kategorien bleiben vollstaendig (Standard)
+   *   'streng'      – nur Eintraege, deren Sprache nachweislich passt
+   *
+   * Fuer Bestandsaufrufe gilt weiterhin `true` = streng, `false` = grosszuegig.
+   */
+  function filterByLanguage(playlist, preferred, modus) {
     if (!preferred || !preferred.length) return playlist;
+    if (modus === true) modus = 'streng';
+    else if (modus === false || modus === undefined) modus = 'grosszuegig';
+    var strict = modus !== 'grosszuegig';
 
     // Auswahl als Nachschlagewerk statt indexOf je Element.
     var wanted = {};
@@ -726,7 +740,9 @@
       for (var j = 0; j < items.length; j++) {
         var x = items[j];
         var info = gruppen[gruppeOf(x) || ''];
-        if (!info || !info.filtern) { out.push(x); continue; }
+        // Im strengen Modus greift das Netz nicht: Dort ist ausdruecklich
+        // gewuenscht, dass alles ohne nachgewiesene Sprache wegfaellt.
+        if (modus !== 'streng' && (!info || !info.filtern)) { out.push(x); continue; }
         if ((x._lang !== null && wanted[x._lang]) || (!strict && x._lang === null)) out.push(x);
       }
       return out;
@@ -857,6 +873,7 @@
     parseEpisodes: parseEpisodes,
     detectLanguage: detectLanguage,
     filterByLanguage: filterByLanguage,
+    SPRACH_MODI: ['grosszuegig', 'ausgewogen', 'streng'],
     parseXMLTV: parseXMLTV,
     parseXmltvDate: parseXmltvDate,
     nowProgram: nowProgram,

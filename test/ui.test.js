@@ -166,6 +166,28 @@ test('Formularelemente erben die Schriftart', function () {
     'button/input erben font-family nicht');
 });
 
+
+test('Filterstufe: alte Einstellung wird migriert', function () {
+  /*
+   * Frueher war `strict` ein boolean. Bestehende Installationen haben dort
+   * `true` stehen – das entspricht jetzt „ausgewogen", also genau dem
+   * Verhalten, das der Nutzer zuletzt gesehen hat. „streng" waere eine stille
+   * Verschaerfung, die ihm ohne Zutun Inhalte wegnaehme.
+   */
+  var quelle = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+  assert.ok(quelle.indexOf("saved.strict === false ? 'grosszuegig' : 'ausgewogen'") > 0,
+    'Migration des alten boolean fehlt');
+  assert.ok(quelle.indexOf("if (typeof saved.strict === 'string')") > 0,
+    'bereits migrierte Werte werden nicht uebernommen');
+  // Unbekannte Werte muessen auf den Standard fallen.
+  assert.ok(quelle.indexOf("SPRACH_STUFEN_IDS.indexOf(state.settings.strict) < 0") > 0,
+    'kein Rueckfall auf den Standard bei unbekanntem Wert');
+  // Drei Stufen, jede mit Erklaerung.
+  var stufen = quelle.split("{ id: 'grosszuegig'").length - 1;
+  assert.strictEqual(stufen, 1);
+  assert.ok(quelle.indexOf("hilfe:") > 0, 'Stufen ohne Erklaerungstext');
+});
+
 test('appinfo.json ist gültig und vollständig', function () {
   var info = JSON.parse(fs.readFileSync(path.join(SRC, 'appinfo.json'), 'utf8'));
   assert.strictEqual(info.id, 'de.app.glasstv');

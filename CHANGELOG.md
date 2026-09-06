@@ -1,5 +1,26 @@
 # Änderungen
 
+## 1.16.1
+
+**Sprachfilter in drei Stufen** statt an/aus. Die beiden alten Enden lagen weit
+auseinander: „aus" ließ alles Unerkannte durch, „an" warf ganze Kategorien weg,
+die kein Sprachkürzel tragen.
+
+- **Großzügig** – die gewählten Sprachen plus alles ohne Sprachangabe.
+- **Ausgewogen** (Standard) – Kategorien mit Sprachkürzel werden gefiltert,
+  Kategorien ohne Angabe bleiben vollständig.
+- **Streng** – nur Titel, deren Sprache nachweislich passt.
+
+Die Einstellung nennt jetzt bei jeder Stufe, was sie bedeutet, und zeigt die
+Auswirkung an der eigenen Playlist („Derzeit sichtbar: 10949 von 42916
+Sendern"). Bestehende Installationen landen auf „Ausgewogen" – das entspricht
+dem Verhalten, das sie zuletzt gesehen haben.
+
+Auf dem Gerät gemessen: Großzügig 10.949, Ausgewogen 10.949, Streng 3.160
+Sender. Bei Xtream fallen die ersten beiden zusammen, weil dort die Kategorie
+die Sprache bestimmt; bei M3U-Playlisten mit Sprachkürzel im Titel gehen sie
+auseinander.
+
 ## 1.16.0
 
 Ergebnis eines zweiten Prüfdurchlaufs (Regression, Player, Datenhaltung,

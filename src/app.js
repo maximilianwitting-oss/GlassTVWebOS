@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.16.0';
+  var APP_VERSION = '1.16.1';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -53,7 +53,7 @@
     activeProfile: 'default',
     gate: false,         // „Wer schaut?" wird gerade gezeigt
     settings: {
-      languages: [], strict: true, design: 'perl', accent: 'violet', sort: 'standard',
+      languages: [], strict: 'ausgewogen', design: 'perl', accent: 'violet', sort: 'standard',
       pin: null, lockedGroups: [], hiddenGroups: [],
     },
     unlocked: false,     // Kindersicherung für diese Sitzung entsperrt
@@ -938,6 +938,23 @@
     { id: 'magenta', name: 'Magenta', color: '#dc4dd1' },
     { id: 'slate', name: 'Schiefer', color: '#8c99b3' },
   ];
+
+  /**
+   * Stufen des Sprachfilters. Vorher gab es nur an/aus, und die beiden Enden
+   * lagen weit auseinander: „aus" liess alles Unerkannte durch, „an" warf ganze
+   * Kategorien weg, die kein Sprachkuerzel tragen.
+   */
+  var SPRACH_STUFEN = [
+    { id: 'grosszuegig', name: 'Großzügig',
+      hilfe: 'Zeigt die gewählten Sprachen und alles, was keine Sprache angibt.' },
+    { id: 'ausgewogen', name: 'Ausgewogen',
+      hilfe: 'Filtert Kategorien mit Sprachkürzel. Kategorien ohne Angabe ' +
+             'bleiben vollständig – dort steckt bei den meisten Anbietern das Meiste.' },
+    { id: 'streng', name: 'Streng',
+      hilfe: 'Nur Titel, deren Sprache nachweislich passt. Alles ohne Angabe ' +
+             'fällt weg – das kann sehr viel sein.' }
+  ];
+  var SPRACH_STUFEN_IDS = ['grosszuegig', 'ausgewogen', 'streng'];
 
   function designById(id) {
     for (var i = 0; i < DESIGNS.length; i++) if (DESIGNS[i].id === id) return DESIGNS[i];
@@ -2818,7 +2835,8 @@
          * dann auch im strikten Modus durch.
          */
         var lang = Core.detectLanguage(gruppe + ' ' + e.t);
-        if (lang === null ? state.settings.strict : !gewaehlteSprachen[lang]) continue;
+        // Unerkannte Titel fallen nur im strengen Modus weg.
+        if (lang === null ? state.settings.strict === 'streng' : !gewaehlteSprachen[lang]) continue;
       }
       out.push({
         id: 'xtream|m|' + e.s,
@@ -3238,16 +3256,37 @@
     }
     el.content.appendChild(langChips);
 
-    var strictActions = element('div', 'actions');
-    strictActions.appendChild(button(
-      state.settings.strict ? 'Strikt filtern: an' : 'Strikt filtern: aus',
-      function () {
-        state.settings.strict = !state.settings.strict;
-        save('settings', state.settings);
-        applyLanguageFilter();
-        render();
-      }, true, 'strikt'));
-    el.content.appendChild(strictActions);
+    // Filterstufe als Chips – ein Umschaltknopf verbarg, dass es drei Stufen
+    // gibt, und sagte nicht, was sie bedeuten.
+    el.content.appendChild(element('div', 'detail-meta', 'Wie streng gefiltert wird'));
+    var stufenChips = element('div', 'chips umbruch');
+    for (var st = 0; st < SPRACH_STUFEN.length; st++) {
+      (function (stufe) {
+        var aktiv = state.settings.strict === stufe.id;
+        var c = element('span', 'chip focusable' + (aktiv ? ' active' : ''), stufe.name);
+        c.tabIndex = 0;
+        c.setAttribute('data-fkey', 'stufe:' + stufe.id);
+        c.onclick = function () {
+          state.settings.strict = stufe.id;
+          save('settings', state.settings);
+          applyLanguageFilter();
+          render();
+        };
+        stufenChips.appendChild(c);
+      })(SPRACH_STUFEN[st]);
+    }
+    el.content.appendChild(stufenChips);
+    // Erklaerung der gewaehlten Stufe – samt der Zahl, um die es geht.
+    var aktuelleStufe = SPRACH_STUFEN[1];
+    for (var sv = 0; sv < SPRACH_STUFEN.length; sv++) {
+      if (SPRACH_STUFEN[sv].id === state.settings.strict) aktuelleStufe = SPRACH_STUFEN[sv];
+    }
+    var erklaerung = aktuelleStufe.hilfe;
+    if (state.rawLibrary) {
+      erklaerung += '  Derzeit sichtbar: ' + state.library.channels.length + ' von ' +
+        state.rawLibrary.channels.length + ' Sendern.';
+    }
+    el.content.appendChild(element('div', 'detail-meta', erklaerung));
 
     // ---- Kategorien ausblenden ----
     var groups = allGroups();
@@ -4252,7 +4291,20 @@
       // auf einem String wirft).
       function asArray(v) { return Object.prototype.toString.call(v) === '[object Array]' ? v : []; }
       state.settings.languages = asArray(saved.languages);
-      state.settings.strict = saved.strict !== false;
+      /*
+       * Migration der Filterstufe: Frueher gab es nur an/aus. „an" entspricht
+       * jetzt „ausgewogen" – das ist das Verhalten, das der Nutzer zuletzt
+       * gesehen hat. Wer wirklich nur die gewaehlten Sprachen will, waehlt in
+       * den Einstellungen „streng".
+       */
+      if (typeof saved.strict === 'string') {
+        state.settings.strict = saved.strict;
+      } else {
+        state.settings.strict = saved.strict === false ? 'grosszuegig' : 'ausgewogen';
+      }
+      if (SPRACH_STUFEN_IDS.indexOf(state.settings.strict) < 0) {
+        state.settings.strict = 'ausgewogen';
+      }
       state.settings.design = saved.design || 'perl';
       state.settings.accent = saved.accent || 'violet';
       state.settings.sort = saved.sort || 'standard';
