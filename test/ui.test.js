@@ -327,6 +327,37 @@ test('appinfo.json ist gültig und vollständig', function () {
   assert.ok(fs.existsSync(path.join(SRC, info.largeIcon)), 'Großes Icon fehlt');
 });
 
+test('jeder feste Fokuswunsch trifft einen wirklich vergebenen Merker', function () {
+  /*
+   * Auf dem Geraet gemessener Fehler: `focusWuenschen('guidemehr')` lief ins
+   * Leere, weil `button()` seinen Merker mit `btn:` praefixiert. Der Fokus
+   * sprang nach jedem Nachladen an den Seitenanfang – sichtbar nur, wenn man
+   * es genau in dem Moment prueft. Dieser Test findet es im Quelltext.
+   */
+  var quelle = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+
+  var wuensche = [], m;
+  var reWunsch = /focusWuenschen\('([^']+)'\)/g;
+  while ((m = reWunsch.exec(quelle)) !== null) wuensche.push(m[1]);
+  assert.ok(wuensche.length >= 3, 'keine festen Fokuswuensche gefunden – Test veraltet?');
+
+  // Was der Quelltext ueberhaupt an Merkern vergibt. Beide Sammlungen duerfen
+  // grosszuegig sein: Zuviel Gesammeltes macht den Test nur nachsichtiger,
+  // niemals falsch-alarmierend.
+  var vergeben = Object.create(null);
+  var reDirekt = /setAttribute\('data-fkey',\s*'([^']+)'/g;
+  while ((m = reDirekt.exec(quelle)) !== null) vergeben[m[1]] = true;
+  // `button(label, fn, ghost, fkey)` haengt 'btn:' vor den Merker.
+  var reKnopf = /,\s*'([A-Za-z][\w:-]*)'\)\)/g;
+  while ((m = reKnopf.exec(quelle)) !== null) vergeben['btn:' + m[1]] = true;
+
+  for (var i = 0; i < wuensche.length; i++) {
+    assert.ok(vergeben[wuensche[i]],
+      'Fokuswunsch „' + wuensche[i] + '" trifft keinen vergebenen Merker' +
+      (vergeben['btn:' + wuensche[i]] ? ' – gemeint war wohl „btn:' + wuensche[i] + '"' : ''));
+  }
+});
+
 console.log('\nErgebnis: ' + (passed + failed) + ' Tests, ' + passed + ' bestanden, ' +
   failed + ' fehlgeschlagen');
 process.exit(failed === 0 ? 0 : 1);

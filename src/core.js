@@ -216,7 +216,7 @@
       name = name.replace(/[\u0000-\u001F\u007F]/g, '');
       var group = (currentAttributes['group-title'] || '').replace(/^\s+|\s+$/g, '') || 'Allgemein';
       var logo = currentAttributes['tvg-logo'] || null;
-      var epgID = currentAttributes['tvg-id'] || null;
+      var epgID = epgKennung(currentAttributes['tvg-id']);
       var itemID = sourceID + '|' + line;
 
       var c = classify(name, group, line);
@@ -289,6 +289,38 @@
     if (typeof v === 'string') return v;
     if (typeof v === 'number') return String(v);
     return null;
+  }
+
+  /**
+   * Kennung fuer den EPG-Abgleich vereinheitlichen.
+   *
+   * Sender und XMLTV kommen oft aus verschiedenen Ausgaben desselben Panels.
+   * Steht in der Senderliste `tvg-id="ard.de "` und im XMLTV `channel="ARD.de"`,
+   * schlug der Abgleich fehl und der Sender hatte still kein Programm — ohne
+   * jeden Hinweis, dass es nur an einem Leerzeichen lag.
+   *
+   * NUR beim Vergleichen aufrufen, nicht beim Einlesen der Senderliste:
+   * `toLowerCase()` ueber die 42.000 Kennungen dieses Panels kostete auf dem
+   * Fernseher gemessen **53 MB Dauerbelegung** (230 -> 283 MB, eine Zeile
+   * Unterschied). Nachgeschlagen werden aber nur die paar Dutzend Sender, die
+   * gerade auf dem Bildschirm stehen.
+   */
+  function epgSchluessel(v) {
+    var s = str(v);
+    if (!s) return null;
+    s = kopie(s.replace(/^\s+|\s+$/g, '').toLowerCase());
+    return s || null;
+  }
+
+  /**
+   * Sparsame Fassung fuer das Einlesen: nur Leerraum abschneiden, damit die
+   * Kennung sauber gespeichert wird. Kleingeschrieben wird erst beim Vergleich.
+   */
+  function epgKennung(v) {
+    var s = str(v);
+    if (!s) return null;
+    s = s.replace(/^\s+|\s+$/g, '');
+    return s || null;
   }
 
   function xtreamApi(host, user, pass, action, extra) {
@@ -370,7 +402,7 @@
         group: kategorieName(categories, s.category_id),
         sid: id,
         art: 'live',
-        epgID: str(s.epg_channel_id),
+        epgID: epgKennung(s.epg_channel_id),
         xtreamStreamID: id,
         archiveDays: num(s.tv_archive_duration),
         sourceID: sourceID,
@@ -406,6 +438,11 @@
         // Jahr auf jeder Detailseite leer und die Sortierung „Jahr" verglich
         // durchgehend -1 mit -1, war also wirkungslos.
         year: jahrAusTitel(s.name),
+        // Zeitpunkt der Aufnahme in den Katalog (Unix-Sekunden). Panels
+        // liefern das Feld praktisch immer mit; ohne es gaebe es keine
+        // Sortierung „Neu hinzugefuegt", und genau danach sucht man auf einer
+        // Startseite als Erstes.
+        added: num(s.added),
         xtreamStreamID: id,
         sourceID: sourceID,
       });
@@ -429,6 +466,21 @@
    * ein Greedy-Muster ueber die ganze Antwort tut genau das.
    */
   function scanVodIndex(text) {
+    return scanIndex(text, eintragLesen);
+  }
+
+  /**
+   * Dasselbe fuer `get_series`. Serien lagen bisher nur kategorieweise vor:
+   * Wer eine Serie suchte, deren Kategorie er noch nicht geoeffnet hatte, fand
+   * nichts — obwohl die Suche „Serien" als eigene Sparte anzeigt. Der Katalog
+   * ist mit rund 12.000 Titeln deutlich kleiner als der Filmkatalog, der Scan
+   * kostet entsprechend wenig.
+   */
+  function scanSeriesIndex(text) {
+    return scanIndex(text, serienEintragLesen);
+  }
+
+  function scanIndex(text, lesen) {
     var out = [];
     if (!text) return out;
 
@@ -455,7 +507,7 @@
       } else {
         tiefe--;
         if (tiefe === 0 && start >= 0) {
-          eintragLesen(out, text.slice(start, i + 1));
+          lesen(out, text.slice(start, i + 1));
           start = -1;
         }
         if (tiefe < 0) tiefe = 0;
@@ -486,6 +538,18 @@
       c: feldText(roh, 'category_id'),
       p: feldText(roh, 'stream_icon'),
       e: feldText(roh, 'container_extension')
+    });
+  }
+
+  /** Dasselbe fuer einen Serien-Datensatz: `series_id` statt `stream_id`. */
+  function serienEintragLesen(out, roh) {
+    var sid = feldText(roh, 'series_id');
+    if (!sid) return;
+    out.push({
+      s: Number(sid),
+      t: feldText(roh, 'name') || ('Serie ' + sid),
+      c: feldText(roh, 'category_id'),
+      p: feldText(roh, 'cover')
     });
   }
 
@@ -854,7 +918,8 @@
     var re = new RegExp(name + '\\s*=\\s*("([^"]*)"|\'([^\']*)\')');
     var m = re.exec(kopf);
     if (!m) return '';
-    return m[2] !== undefined ? m[2] : (m[3] || '');
+    // Fanggruppen sind in V8 ebenfalls Zeiger auf den Elternstring.
+    return kopie(m[2] !== undefined ? m[2] : (m[3] || ''));
   }
 
   /**
@@ -873,8 +938,18 @@
   }
 
   /** Die fuenf XML-Entitaeten plus Zahlenreferenzen aufloesen. */
+  /**
+   * XML-Entitaeten aufloesen – und das Ergebnis IMMER als eigenstaendige
+   * Zeichenkette zurueckgeben.
+   *
+   * Ohne `kopie()` ist der haeufige Fall (Text ohne `&`) ein Rueckgabewert,
+   * der auf denselben V8-SlicedString zeigt wie der Ausschnitt aus der
+   * XMLTV-Datei. Jeder behaltene Sendungstitel haelt damit die GANZE Datei im
+   * Speicher – hier 64,4 MB. Genau dieser Fehler war beim Titelverzeichnis
+   * schon einmal dran; im XMLTV-Scanner stand die Kopie noch aus.
+   */
   function entitaeten(t) {
-    if (t.indexOf('&') < 0) return t;
+    if (t.indexOf('&') < 0) return kopie(t);
     return t
       .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
@@ -894,9 +969,13 @@
     if (wantedIds) {
       filter = Object.create(null);
       for (var f = 0; f < wantedIds.length; f++) {
-        if (wantedIds[f]) filter[String(wantedIds[f]).toLowerCase()] = true;
+        var wk = epgSchluessel(wantedIds[f]);
+        if (wk) filter[wk] = true;
       }
     }
+    // Rohkennung -> vereinheitlichte Kennung, damit die Normalisierung je
+    // Sender genau einmal laeuft statt je Sendung.
+    var schluessel = Object.create(null);
     /*
      * Zeitfenster eng halten. Auf dem Geraet gemessen: Mit −8/+72 Stunden
      * blieben aus der 64-MB-Datei dieses Panels **107.495 Sendungen** im
@@ -937,7 +1016,16 @@
       pos = ende + 1;
 
       var kopf = xmlText.slice(anfang, kopfEnde);
-      var channel = attrAus(kopf, 'channel').toLowerCase();
+      /*
+       * Ueber den Zwischenspeicher, nicht direkt: `epgSchluessel` laeuft sonst
+       * fuer JEDE der 206.615 Sendungen und legt jedes Mal eine neue
+       * Zeichenkette an – auf dem Geraet gemessen 52 MB Dauerbelegung, obwohl
+       * es nur rund 1.400 verschiedene Senderkennungen gibt. Mit dem
+       * Zwischenspeicher teilen sich alle Sendungen eines Senders dieselbe.
+       */
+      var roh = attrAus(kopf, 'channel');
+      var channel = schluessel[roh];
+      if (channel === undefined) channel = schluessel[roh] = epgSchluessel(roh);
       if (!channel) continue;
       if (filter && !filter[channel]) continue;
 
@@ -985,6 +1073,75 @@
     return best;
   }
 
+  /**
+   * Relevanz eines Titels zu einer Suchanfrage. 0 heisst „passt nicht".
+   *
+   * Warum ueberhaupt: Die Suche nahm bisher die ERSTEN 30 Titel, in denen die
+   * Anfrage irgendwo vorkam, und brach dann ab. Bei 142.000 Filmen entschied
+   * damit die Reihenfolge im Katalog des Anbieters, was man zu sehen bekam:
+   * „Matrix" lieferte „Die Matrix-Verschwoerung" und „Matrixx", der eigentlich
+   * gesuchte Film stand irgendwo dahinter und wurde nie erreicht.
+   *
+   * Bewertet wird, WO die Anfrage sitzt — je weiter vorn und je genauer die
+   * Wortgrenze, desto hoeher:
+   *
+   *   1000  Titel ist die Anfrage
+   *    800  Titel beginnt mit der Anfrage        („Matrix Reloaded")
+   *    600  Anfrage steht auf einer Wortgrenze   („DE| Matrix (1999)")
+   *    400  Anfrage steht irgendwo im Titel      („Matrixx")
+   *    300  alle Woerter kommen vor, in beliebiger Reihenfolge
+   *
+   * Der Abzug fuer die Titellaenge sortiert bei gleichem Rang den knapperen
+   * Titel nach oben: „Matrix" vor „Matrix – Die Dokumentation ueber …".
+   */
+  function trefferRang(titel, anfrage, teile) {
+    if (!titel || !anfrage) return 0;
+    var t = titel.toLowerCase();
+    var pos = t.indexOf(anfrage);
+    var rang = 0;
+
+    if (pos >= 0) {
+      if (t.length === anfrage.length) rang = 1000;
+      else if (pos === 0) rang = 800;
+      else if (istWortgrenze(t, pos)) rang = 600;
+      else rang = 400;
+      // Frueher im Titel ist besser, aber nie so stark, dass es eine Stufe kippt.
+      rang -= Math.min(pos, 60) / 2;
+    } else if (teile && teile.length > 1) {
+      // „knight dark" soll „The Dark Knight" finden. Nur wenn ALLE Woerter
+      // vorkommen – sonst faende „der herr" jeden zweiten Titel.
+      for (var i = 0; i < teile.length; i++) {
+        if (t.indexOf(teile[i]) < 0) return 0;
+      }
+      rang = 300;
+    } else {
+      return 0;
+    }
+
+    // Laengenabzug, gedeckelt: ein sehr langer Titel soll nicht unter eine
+    // ganze Rangstufe fallen, nur weiter hinten in seiner Stufe stehen.
+    return rang - Math.min(t.length, 90) / 2;
+  }
+
+  /** Steht an `pos` ein Wortanfang? (Zeichen davor ist kein Buchstabe/Ziffer.) */
+  function istWortgrenze(text, pos) {
+    var c = text.charCodeAt(pos - 1);
+    if (c >= 48 && c <= 57) return false;               // 0-9
+    if (c >= 97 && c <= 122) return false;              // a-z
+    // Umlaute und Akzente zaehlen als Buchstabe. \p{L} kennt Chromium 53 nicht,
+    // der Latin-1- und Latin-Extended-A-Bereich deckt die hier ueblichen ab.
+    if (c >= 0xC0 && c <= 0x17F) return false;
+    return true;
+  }
+
+  /** Anfrage in Suchwoerter zerlegen (leere Teile fallen weg). */
+  function sucheZerlegen(anfrage) {
+    var roh = String(anfrage || '').toLowerCase().split(/\s+/);
+    var out = [];
+    for (var i = 0; i < roh.length; i++) if (roh[i]) out.push(roh[i]);
+    return out;
+  }
+
   global.GlassTVCore = {
     parseM3U: parseM3U,
     displayNameIndex: displayNameIndex,
@@ -995,11 +1152,16 @@
     parseLiveStreams: parseLiveStreams,
     parseVodStreams: parseVodStreams,
     scanVodIndex: scanVodIndex,
+    scanSeriesIndex: scanSeriesIndex,
+    trefferRang: trefferRang,
+    sucheZerlegen: sucheZerlegen,
     parseSeriesList: parseSeriesList,
     parseEpisodes: parseEpisodes,
     detectLanguage: detectLanguage,
     filterByLanguage: filterByLanguage,
     SPRACH_MODI: ['grosszuegig', 'ausgewogen', 'streng'],
+    epgSchluessel: epgSchluessel,
+    epgKennung: epgKennung,
     parseXMLTV: parseXMLTV,
     parseXmltvDate: parseXmltvDate,
     nowProgram: nowProgram,

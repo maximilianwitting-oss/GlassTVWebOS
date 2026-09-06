@@ -84,7 +84,7 @@ technisch nicht möglich (siehe unten).
 
   | Posten | ursprünglich | 1.14 | jetzt |
   |---|---|---|---|
-  | Prozess gesamt | — | 388 MB | **205 MB** |
+  | Prozess gesamt | — | 388 MB | **214 MB** |
   | JS-Heap nach dem Start | 117 MB | 82 MB | **21 MB** |
   | bis die Bibliothek steht | — | 72 s | **41 s** |
   | dekodierte Bilder | 242 MB | 61 MB | 61 MB |

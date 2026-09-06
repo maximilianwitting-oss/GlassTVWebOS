@@ -36,10 +36,14 @@
     lazyKatalog: false,
     katWahl: { movies: null, series: null },
     katSuche: { m: '', s: '' },
+    setupEingabe: null,     // Getipptes im Einrichtungsformular
+    guideSuche: '',         // Filter im Programmfuehrer
+    guideLimit: 100,        // wie viele Sender dort gezeigt werden
     authFehler: null,       // haelt den Einrichtungsbildschirm offen
     authIstNetz: false,     // Netzaussetzer statt abgelehnter Anmeldung
     setupFokusGesetzt: false,
     filmIndex: null,        // schlanker Titelindex, nur auf Wunsch
+    serienIndex: null,      // dasselbe fuer Serien
     indexLaedt: false,
     vodKategorien: [],      // [{ id, name }]
     serienKategorien: [],
@@ -810,7 +814,12 @@
   }
 
   function programsFor(ch) {
-    return ch.epgID ? state.epg[ch.epgID.toLowerCase()] : null;
+    // Ueber `epgSchluessel`, damit hier genau dieselbe Vereinheitlichung
+    // greift wie auf der XMLTV-Seite – ein blosses `toLowerCase()` liess
+    // Kennungen mit Leerraum am Rand ins Leere laufen.
+    if (!ch.epgID) return null;
+    var k = Core.epgSchluessel(ch.epgID);
+    return k ? state.epg[k] : null;
   }
 
   function isFavorite(id) { return !!state.favorites[id]; }
@@ -1242,11 +1251,33 @@
       copy.sort(function (a, b) {
         return a._sortName < b._sortName ? -1 : (a._sortName > b._sortName ? 1 : 0);
       });
-    } else if (sort === 'year') {
-      // Titel ohne Jahr/Bewertung ans Ende statt nach vorn spülen.
-      copy.sort(function (a, b) { return (parseInt(b.year, 10) || -1) - (parseInt(a.year, 10) || -1); });
-    } else if (sort === 'rating') {
-      copy.sort(function (a, b) { return (Number(b.rating) || -1) - (Number(a.rating) || -1); });
+    } else {
+      /*
+       * Zahlensortierungen brauchen einen Zweitschluessel: `Array#sort` ist auf
+       * Chromium 53 nicht stabil, und gerade hier haben sehr viele Titel
+       * denselben Wert – „Jahr" bei allen ohne Jahresangabe, „Bewertung" bei
+       * allen ohne Bewertung. Ohne Zweitschluessel stand die Liste bei jedem
+       * Aufbau anders da.
+       */
+      var wert;
+      if (sort === 'year') {
+        // Titel ohne Jahr/Bewertung ans Ende statt nach vorn spülen.
+        wert = function (x) { return parseInt(x.year, 10) || -1; };
+      } else if (sort === 'rating') {
+        wert = function (x) { return Number(x.rating) || -1; };
+      } else if (sort === 'added') {
+        wert = function (x) { return Number(x.added) || -1; };
+      } else {
+        return list;   // unbekannter Schluessel: lieber unveraendert lassen
+      }
+      for (var p = 0; p < copy.length; p++) {
+        if (copy[p]._sortName === undefined) copy[p]._sortName = (copy[p][titleKey] || '').toLowerCase();
+      }
+      copy.sort(function (a, b) {
+        var d = wert(b) - wert(a);
+        if (d) return d;
+        return a._sortName < b._sortName ? -1 : (a._sortName > b._sortName ? 1 : 0);
+      });
     }
     sortCache[key] = copy;
     return copy;
@@ -2877,24 +2908,44 @@
       return;
     }
 
-    // Suche mit Abbruch bei 30 Treffern statt drei Voll-Scans über 215.000
-    // Titel mit je einem neuen Kleinbuchstaben-String.
+    var qTeile = Core.sucheZerlegen(q);
+
+    /*
+     * Vollstaendiger Durchlauf mit Rangfolge statt Abbruch beim 30. Treffer.
+     *
+     * Der Abbruch war der eigentliche Fehler der alten Suche: Er lieferte die
+     * ersten 30 Titel in der Reihenfolge des Anbieters, nicht die 30 besten.
+     * Wer „ard" eingab, bekam „Bayerisches Fernsehen ARD-alpha" und „SWR ARD"
+     * – der Sender ARD stand irgendwo dahinter und wurde nie erreicht.
+     *
+     * Der volle Durchlauf ist bezahlbar, weil er nur beim Druck auf „Suchen"
+     * laeuft, nicht bei jedem Tastendruck: `oninput` schreibt nur mit.
+     */
     function search(list, field, limit) {
-      var out = [];
-      for (var i = 0; i < list.length && out.length < limit; i++) {
-        var text = list[i][field];
-        if (text && text.toLowerCase().indexOf(q) >= 0) out.push(list[i]);
+      var treffer = [];
+      for (var i = 0; i < list.length; i++) {
+        var r = Core.trefferRang(list[i][field], q, qTeile);
+        // Position mitfuehren: `Array#sort` ist auf Chromium 53 nicht stabil,
+        // ohne zweites Kriterium waere die Reihenfolge gleichwertiger
+        // Treffer bei jedem Aufruf eine andere.
+        if (r > 0) treffer.push({ r: r, i: i, o: list[i] });
       }
+      treffer.sort(function (a, b) { return b.r - a.r || a.i - b.i; });
+      var out = [];
+      for (var j = 0; j < treffer.length && j < limit; j++) out.push(treffer[j].o);
+      out.gesamt = treffer.length;
       return out;
     }
 
     /*
-     * Die Suche bricht je Sparte bei 30 Treffern ab – ein Volltreffer-Scan
-     * ueber 142.000 Titel je Tastendruck waere zu teuer. Das muss man sagen,
-     * sonst haelt man die uebrigen Treffer fuer nicht vorhanden.
+     * Wie viele Treffer es insgesamt gibt, gehoert in die Ueberschrift: Sonst
+     * haelt man die gezeigten fuer alle. Frueher stand dort „erste 30" – das
+     * sagte nicht, ob 31 oder 4.000 folgen.
      */
-    function spartenTitel(name, treffer, grenze) {
-      return treffer.length >= grenze ? name + ' · erste ' + grenze : name;
+    function spartenTitel(name, treffer) {
+      var gesamt = treffer.gesamt === undefined ? treffer.length : treffer.gesamt;
+      if (gesamt <= treffer.length) return name;
+      return name + ' · ' + treffer.length + ' von ' + gesamt;
     }
     var ch = search(state.library.channels, 'name', 30);
     var mv, sr;
@@ -2902,8 +2953,12 @@
       // Filme liegen nicht mehr komplett im Speicher. Gesucht wird in dem, was
       // geladen ist – und, wenn der Nutzer ihn zugeschaltet hat, im schlanken
       // Titelindex über den ganzen Katalog.
-      mv = state.filmIndex ? indexSuche(q, 30) : search(geladeneFilme(), 'title', 30);
-      sr = search(geladeneSerien(), 'title', 30);
+      mv = state.filmIndex
+        ? indexSuche(state.filmIndex, state.vodKategorien, 'm', q, qTeile, 30)
+        : search(geladeneFilme(), 'title', 30);
+      sr = state.serienIndex
+        ? indexSuche(state.serienIndex, state.serienKategorien, 'e', q, qTeile, 30)
+        : search(geladeneSerien(), 'title', 30);
     } else {
       mv = search(state.library.movies, 'title', 30);
       sr = search(state.library.series, 'title', 30);
@@ -2918,16 +2973,16 @@
       return;
     }
     if (ch.length) {
-      el.content.appendChild(element('div', 'section-title', spartenTitel('Sender', ch, 30)));
+      el.content.appendChild(element('div', 'section-title', spartenTitel('Sender', ch)));
       var box = document.createElement('div');
       for (var i = 0; i < ch.length; i++) box.appendChild(channelRow(ch[i], null));
       el.content.appendChild(box);
     }
-    var s1 = shelf(spartenTitel('Filme', mv, 30), mv, function (m) {
+    var s1 = shelf(spartenTitel('Filme', mv), mv, function (m) {
       return card(m.title, m.posterURL, function () { openMovie(m); }, false, m.id);
     });
     if (s1) el.content.appendChild(s1);
-    var s2 = shelf(spartenTitel('Serien', sr, 30), sr, function (s) {
+    var s2 = shelf(spartenTitel('Serien', sr), sr, function (s) {
       return card(s.title, s.posterURL, function () { openSeries(s); }, false, s.id);
     });
     if (s2) el.content.appendChild(s2);
@@ -2953,57 +3008,90 @@
        */
       var laden = element('div', 'such-status-zeile');
       laden.appendChild(element('div', 'spinner klein'));
-      laden.appendChild(element('div', 'such-status',
-        'Titelverzeichnis wird aufgebaut – das dauert etwa 15 Sekunden.'));
+      laden.appendChild(element('div', 'such-status', state.indexLaedt));
       return laden;
     }
-    if (state.filmIndex) {
+    if (state.filmIndex || state.serienIndex) {
       var box = element('div', 'such-status-zeile');
-      box.appendChild(element('div', 'such-status',
-        'Alle ' + state.filmIndex.length + ' Filme durchsuchbar.'));
+      var teile = [];
+      if (state.filmIndex) teile.push(state.filmIndex.length + ' Filme');
+      if (state.serienIndex) teile.push(state.serienIndex.length + ' Serien');
+      box.appendChild(element('div', 'such-status', teile.join(' und ') + ' durchsuchbar.'));
       // Ein Verzeichnis kann unbrauchbar entstehen (verpackte Antwort,
       // abgebrochene Verbindung). Ohne diesen Knopf blieb es bis zum
       // App-Neustart bestehen und die Suche fand praktisch nichts.
       box.appendChild(button('Neu aufbauen', function () {
         state.filmIndex = null;
-        filmIndexAufbauen();
+        state.serienIndex = null;
+        verzeichnisAufbauen();
       }, true, 'indexneu'));
       return box;
     }
     var box = element('div', 'panel');
     box.appendChild(element('div', 'detail-meta',
       'Gesucht wird gerade nur in den geöffneten Kategorien. Das Titelverzeichnis ' +
-      'macht alle Filme durchsuchbar; es kostet einmalig etwa 15 Sekunden und ' +
-      'rund 13 MB Speicher.'));
-    box.appendChild(button('Alle Filme durchsuchbar machen', function () {
+      'macht alle Filme und Serien durchsuchbar; es kostet einmalig etwa 15 Sekunden ' +
+      'und rund 14 MB Speicher.'));
+    box.appendChild(button('Alles durchsuchbar machen', function () {
       // Fokus vorbelegen: Der Knopf loest sich beim Aufbau auf, der Merker
       // liefe sonst ins Leere und der Fokus spraenge auf „Zurueck".
       focusWuenschen('suchfeld');
-      filmIndexAufbauen();
+      verzeichnisAufbauen();
     }, true, 'indexbauen'));
     return box;
   }
 
   /**
-   * Titelindex holen. Absichtlich OHNE JSON.parse: Der Objektgraph des vollen
-   * Katalogs belegte rund 50 MB, der Regex-Scan über den Antworttext liefert
+   * Titelverzeichnis holen. Absichtlich OHNE JSON.parse: Der Objektgraph des
+   * vollen Katalogs belegte rund 50 MB, der Scan über den Antworttext liefert
    * dasselbe für 13 MB (auf dem Gerät gemessen: 142.246 Titel, 5 s laden,
    * 2 s auswerten).
+   *
+   * Filme UND Serien: Die Suche zeigt „Serien" als eigene Sparte an, durchsucht
+   * hat sie bisher aber nur die geöffneten Kategorien. Wer eine Serie suchte,
+   * deren Rubrik er noch nie geöffnet hatte, bekam „Keine Treffer" – und keinen
+   * Hinweis, dass die Serie sehr wohl da ist.
    */
-  function filmIndexAufbauen() {
+  function verzeichnisAufbauen() {
     var src = state.source;
     if (!src || src.kind !== 'xtream' || state.indexLaedt) return;
     // Ohne Kategorienliste liesse sich nicht entscheiden, was gesperrt ist –
     // dann lieber kein Verzeichnis als eines, das die Sperren umgeht.
-    if (!state.vodKategorien.length) {
+    if (!state.vodKategorien.length && !state.serienKategorien.length) {
       toast('Ohne Kategorienliste lässt sich kein Titelverzeichnis aufbauen. ' +
         'In den Einstellungen „Neu laden“ versuchen.', 8000);
       return;
     }
-    state.indexLaedt = true;
+    state.indexLaedt = 'Titelverzeichnis wird aufgebaut – das dauert etwa 15 Sekunden.';
     render();
+    holeVerzeichnis('get_vod_streams', Core.scanVodIndex, function (liste) {
+      if (liste) state.filmIndex = liste;
+      // Serien erst danach: Zwei megabytegrosse Antworten gleichzeitig im
+      // Speicher waren auf dem Fernseher der sichere Weg in den Absturz.
+      state.indexLaedt = 'Serien werden erfasst …';
+      if (state.view && state.view.type === 'search') render();
+      holeVerzeichnis('get_series', Core.scanSeriesIndex, function (serien) {
+        if (serien) state.serienIndex = serien;
+        state.indexLaedt = null;
+        var teile = [];
+        if (state.filmIndex) teile.push(state.filmIndex.length + ' Filme');
+        if (state.serienIndex) teile.push(state.serienIndex.length + ' Serien');
+        if (teile.length) toast(teile.join(' und ') + ' durchsuchbar.');
+        else {
+          toast('Titelverzeichnis konnte nicht gelesen werden – die Antwort des ' +
+            'Anbieters hat ein unerwartetes Format.', 8000);
+        }
+        // Nur zeichnen, wenn die Suche noch offen ist: Sonst riss der Aufbau
+        // den Nutzer aus der Ansicht, in der er inzwischen war.
+        if (state.view && state.view.type === 'search') render();
+      });
+    });
+  }
 
-    var url = Core.xtreamApi(src.host, src.user, src.pass, 'get_vod_streams');
+  /** Eine Katalogantwort holen und mit `scan` auswerten; `null` bei Fehlschlag. */
+  function holeVerzeichnis(aktion, scan, fertig) {
+    var src = state.source;
+    var url = Core.xtreamApi(src.host, src.user, src.pass, aktion);
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, true);
     xhr.timeout = 120000;
@@ -3011,12 +3099,11 @@
       var eintraege = null;
       var laenge = (xhr.responseText || '').length;
       try {
-        eintraege = Core.scanVodIndex(xhr.responseText);
+        eintraege = scan(xhr.responseText);
       } catch (e) {
         eintraege = null;
       }
       xhr.onload = null;
-      state.indexLaedt = false;
       /*
        * Plausibilitaet: Eine verpackte Antwort ({"movie_data":[…]}) oder eine
        * abgebrochene Verbindung ergibt einen oder wenige Eintraege bei einer
@@ -3024,39 +3111,48 @@
        * stillschweigend nutzlos.
        */
       var zuKlein = eintraege && eintraege.length < 10 && laenge > 1000000;
-      if (!eintraege || !eintraege.length || zuKlein) {
-        toast('Titelverzeichnis konnte nicht gelesen werden – die Antwort des ' +
-          'Anbieters hat ein unerwartetes Format.', 8000);
-      } else {
-        state.filmIndex = eintraege;
-        toast(eintraege.length + ' Filmtitel durchsuchbar.');
-      }
-      // Nur zeichnen, wenn die Suche noch offen ist: Sonst riss der Aufbau den
-      // Nutzer aus der Ansicht, in der er inzwischen war.
-      if (state.view && state.view.type === 'search') render();
+      fertig(!eintraege || !eintraege.length || zuKlein ? null : eintraege);
     };
-    xhr.onerror = function () {
-      state.indexLaedt = false;
+    var schief = function () {
+      state.indexLaedt = null;
       toast('Titelverzeichnis konnte nicht geladen werden. Prüfe die ' +
         'Internetverbindung und versuch es noch einmal.', 8000);
       if (state.view && state.view.type === 'search') render();
     };
-    xhr.ontimeout = xhr.onerror;
+    xhr.onerror = schief;
+    xhr.ontimeout = schief;
     // Ohne onabort bliebe `indexLaedt` haengen, wenn die Plattform die Anfrage
     // abbricht (App in den Hintergrund, Netzwechsel) – der Knopf kaeme nie wieder.
-    xhr.onabort = xhr.onerror;
+    xhr.onabort = schief;
     xhr.send();
   }
 
-  /** Im Titelindex suchen; das Ergebnis sieht aus wie ein Filmeintrag. */
-  function indexSuche(q, limit) {
-    var out = [], idx = state.filmIndex;
+  /**
+   * Im Titelverzeichnis suchen – nach Rang, nicht nach Katalogreihenfolge.
+   *
+   * Reihenfolge der Schritte ist wichtig: erst bewerten und sortieren, dann
+   * die teuren Pruefungen (Kategorie, Sprache) nur noch auf die besten
+   * Kandidaten anwenden. Umgekehrt liefe `detectLanguage` ueber jeden der
+   * zehntausenden Texttreffer, obwohl 30 davon angezeigt werden.
+   */
+  function indexSuche(idx, kategorien, marke, q, qTeile, limit) {
+    var out = [];
+    out.gesamt = 0;
     if (!idx) return out;
+
+    var treffer = [];
+    for (var i = 0; i < idx.length; i++) {
+      var r = Core.trefferRang(idx[i].t, q, qTeile);
+      if (r > 0) treffer.push({ r: r, i: i, e: idx[i] });
+    }
+    // Zweites Kriterium, weil `Array#sort` auf Chromium 53 nicht stabil ist.
+    treffer.sort(function (a, b) { return b.r - a.r || a.i - b.i; });
+
     // Prototypfrei: Sonst ist katName['constructor'] wahr und eine so
     // benannte Kategorie gaelte als bekannt – der Schutz unten fiele aus.
     var katName = Object.create(null);
-    for (var c = 0; c < state.vodKategorien.length; c++) {
-      katName[state.vodKategorien[c].id] = state.vodKategorien[c].name;
+    for (var c = 0; c < kategorien.length; c++) {
+      katName[kategorien[c].id] = kategorien[c].name;
     }
     // Einmal vor der Schleife: sonst je Treffer neu gebaut.
     var gewaehlteSprachen = null;
@@ -3066,11 +3162,11 @@
         gewaehlteSprachen[state.settings.languages[sp]] = true;
       }
     }
+
     // Sprachfilter, ausgeblendete und gesperrte Kategorien gelten auch hier –
     // sonst wäre die Suche ein Weg an der Kindersicherung vorbei.
-    for (var i = 0; i < idx.length && out.length < limit; i++) {
-      var e = idx[i];
-      if (e.t.toLowerCase().indexOf(q) < 0) continue;
+    for (var k = 0; k < treffer.length; k++) {
+      var e = treffer[k].e;
       /*
        * Eine Kategorie, die die Kategorienliste nicht kennt, gilt als GESPERRT.
        * Vorher fiel sie auf „Allgemein" – ein Name, der nie in den Sperrlisten
@@ -3092,7 +3188,21 @@
         // Unerkannte Titel fallen nur im strengen Modus weg.
         if (lang === null ? state.settings.strict === 'streng' : !gewaehlteSprachen[lang]) continue;
       }
-      out.push({
+      // Erlaubte Treffer zaehlen, auch die jenseits der Anzeigegrenze: Die
+      // Ueberschrift soll „30 von 412" sagen koennen.
+      out.gesamt++;
+      if (out.length >= limit) continue;
+      out.push(marke === 'e' ? {
+        id: 'xtream|series|' + e.s,
+        title: e.t,
+        posterURL: e.p || '',
+        group: gruppe,
+        art: 'series',
+        episodes: [],
+        // Ohne die Nummer holt `openSeries` keine Folgen – der Treffer zeigte
+        // dauerhaft „Keine Folgen".
+        xtreamSeriesID: e.s
+      } : {
         id: 'xtream|m|' + e.s,
         title: e.t,
         posterURL: e.p || '',
@@ -3120,11 +3230,35 @@
       return renderEmpty('Kein Programmführer',
         'Diese Quelle liefert keine EPG-Daten (XMLTV).');
     }
-    el.content.appendChild(element('div', 'section-title', withEpg.length > 100
-      ? 'Jetzt und danach · 100 von ' + withEpg.length + ' Sendern'
-      : 'Jetzt und danach'));
+    /*
+     * Der Deckel bei 100 Sendern war eine Sackgasse: Bei 1.800 Sendern mit
+     * Programm war der 101. schlicht nicht erreichbar – kein Suchfeld, kein
+     * Nachladen, nur eine Ueberschrift, die das Fehlende benannte.
+     */
+    var gesucht = (state.guideSuche || '').replace(/^\s+|\s+$/g, '').toLowerCase();
+    if (gesucht) {
+      var gefiltert = [];
+      for (var g = 0; g < withEpg.length; g++) {
+        if (withEpg[g].name && withEpg[g].name.toLowerCase().indexOf(gesucht) >= 0) {
+          gefiltert.push(withEpg[g]);
+        }
+      }
+      withEpg = gefiltert;
+    }
+    el.content.appendChild(guideSuchfeld());
+
+    var grenze = state.guideLimit || 100;
+    el.content.appendChild(element('div', 'section-title',
+      withEpg.length > grenze
+        ? 'Jetzt und danach · ' + grenze + ' von ' + withEpg.length + ' Sendern'
+        : 'Jetzt und danach · ' + withEpg.length + ' Sender'));
+    if (!withEpg.length) {
+      el.content.appendChild(element('div', 'detail-meta',
+        'Kein Sender mit Programm passt zu „' + state.guideSuche + '“.'));
+      return;
+    }
     var box = document.createElement('div');
-    for (var i = 0; i < withEpg.length && i < 100; i++) {
+    for (var i = 0; i < withEpg.length && i < grenze; i++) {
       (function (ch) {
         var programs = programsFor(ch);
         var now = Core.nowProgram(programs);
@@ -3155,11 +3289,53 @@
         }
         row.appendChild(info);
         row.onclick = function () { playChannel(ch); };
-        row._favTarget = ch.id; row._favItem = ch; row._favItem = ch;
+        row._favTarget = ch.id; row._favItem = ch;
         box.appendChild(row);
       })(withEpg[i]);
     }
     el.content.appendChild(box);
+    if (withEpg.length > grenze) {
+      var rest = withEpg.length - grenze;
+      el.content.appendChild(button('Weitere ' + Math.min(rest, 100) + ' Sender anzeigen',
+        function () {
+          state.guideLimit = grenze + 100;
+          /*
+           * Fokus auf den Knopf zurueck, damit man weiterdruecken kann statt
+           * nach jedem Nachladen wieder hochzuscrollen. Der Merker MUSS das
+           * `btn:` von `button()` tragen – ohne das lief der Wunsch ins Leere
+           * und der Fokus sprang auf „Zurueck" am Seitenanfang (auf dem Geraet
+           * gemessen).
+           */
+          focusWuenschen('btn:guidemehr');
+          render();
+        }, true, 'guidemehr'));
+    }
+  }
+
+  /** Suchfeld ueber dem Programmfuehrer – ohne es sind 1.800 Sender eine Wand. */
+  function guideSuchfeld() {
+    var wrap = element('div', 'search-wrap');
+    var input = document.createElement('input');
+    input.className = 'search focusable';
+    input.type = 'text';
+    input.placeholder = 'Sender im Programmführer suchen …';
+    input.value = state.guideSuche || '';
+    input.setAttribute('data-fkey', 'guidesuche');
+    var letzter = null;
+    input.oninput = function () {
+      // Wie beim Kategorienfeld: `oninput` fehlt auf manchen TV-Tastaturen,
+      // deshalb haengt unten zusaetzlich `onkeyup` dran – und der Vergleich
+      // verhindert, dass beide zusammen doppelt zeichnen.
+      if (input.value === letzter) return;
+      letzter = input.value;
+      state.guideSuche = input.value;
+      state.guideLimit = 100;   // neue Suche faengt wieder oben an
+      focusWuenschen('guidesuche');
+      render();
+    };
+    input.onkeyup = input.oninput;
+    wrap.appendChild(input);
+    return wrap;
   }
 
   // ---- Einstellungen ----
@@ -3324,7 +3500,8 @@
       state.lazyKatalog
         ? (state.library.channels.length + ' Sender · ' + state.vodKategorien.length +
            ' Filmkategorien · ' + state.serienKategorien.length + ' Serienkategorien' +
-           (state.filmIndex ? ' · ' + state.filmIndex.length + ' Titel im Verzeichnis' : ''))
+           (state.filmIndex ? ' · ' + state.filmIndex.length + ' Filme im Verzeichnis' : '') +
+           (state.serienIndex ? ' · ' + state.serienIndex.length + ' Serien im Verzeichnis' : ''))
         : (state.library.channels.length + ' Sender · ' + state.library.movies.length +
            ' Filme · ' + state.library.series.length + ' Serien')));
 
@@ -3467,6 +3644,7 @@
     var sorts = [
       { id: 'standard', name: 'Standard' }, { id: 'name', name: 'Name (A–Z)' },
       { id: 'year', name: 'Jahr' }, { id: 'rating', name: 'Bewertung' },
+      { id: 'added', name: 'Neu hinzugefügt' },
     ];
     for (var k = 0; k < sorts.length; k++) {
       (function (o) {
@@ -3669,7 +3847,14 @@
   }
 
   function renderSetup() {
-    var saved = load('source', null);
+    /*
+     * Vorbelegung aus dem letzten VERSUCH, nicht nur aus der gespeicherten
+     * Quelle. Gespeichert wird erst bei Erfolg – nach einem Fehlversuch stand
+     * im Formular also wieder der alte (oder gar kein) Wert, und wer sich bei
+     * einem 60 Zeichen langen Passwort auf der Fernbedienungstastatur vertippt
+     * hatte, durfte alles noch einmal eingeben.
+     */
+    var saved = state.setupEingabe || load('source', null);
     var panel = element('div', 'panel');
     panel.appendChild(element('h2', null, 'Quelle einrichten'));
     if (state.authFehler) {
@@ -3707,12 +3892,20 @@
     var m3u = field('… oder M3U-Adresse', saved && saved.m3u);
 
     var actions = element('div', 'actions');
+    /** Getipptes sichern, bevor ein Ladeversuch die Ansicht neu aufbaut. */
+    function eingabeMerken() {
+      state.setupEingabe = {
+        host: host.value, user: user.value, pass: pass.value, m3u: m3u.value
+      };
+    }
     actions.appendChild(button('Xtream laden', function () {
+      eingabeMerken();
       var cleanHost = Core.sanitizedHost(host.value);
       if (!cleanHost) return toast('Bitte eine gültige Server-Adresse eingeben.');
       loadXtreamSource(cleanHost, user.value, pass.value);
     }));
     actions.appendChild(button('M3U laden', function () {
+      eingabeMerken();
       if (!m3u.value) return toast('Bitte eine M3U-Adresse eingeben.');
       loadM3USource(m3u.value);
     }, true));
@@ -3854,10 +4047,14 @@
       if (err) { render(); return toast('M3U konnte nicht geladen werden: ' + err.message, 8000); }
       state.source = { kind: 'm3u', m3u: url };
       save('source', state.source);
+      // Geglueckt: Das Zwischenergebnis des Formulars wird nicht mehr gebraucht
+      // – und das Passwort soll nicht laenger als noetig doppelt herumliegen.
+      state.setupEingabe = null;
       state.epg = Object.create(null);
       // Eine M3U-Datei enthält alles auf einmal – kein Nachladen nötig.
       state.lazyKatalog = false;
       state.filmIndex = null;
+      state.serienIndex = null;
       state.indexLaedt = false;
       state.katalogCache = {};
       state.katalogReihe = [];
@@ -3923,6 +4120,9 @@
       state.authFehler = null;
       state.source = { kind: 'xtream', host: host, user: user, pass: pass };
       save('source', state.source);
+      // Geglueckt: Das Zwischenergebnis des Formulars wird nicht mehr gebraucht
+      // – und das Passwort soll nicht laenger als noetig doppelt herumliegen.
+      state.setupEingabe = null;
       state.lazyKatalog = true;
       state.vodKategorien = vodKategorien;
       state.serienKategorien = serienKategorien;
@@ -3932,6 +4132,7 @@
       // mit den neuen Zugangsdaten ergaeben fremde oder tote Adressen, und
       // seine Kategorie-Kennungen zeigten auf die falschen Namen.
       state.filmIndex = null;
+      state.serienIndex = null;
       state.indexLaedt = false;
       try {
         afterLoad(lib);

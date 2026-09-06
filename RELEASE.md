@@ -1,23 +1,23 @@
 # Release und Einreichung
 
-Stand: 1.15.0, gebaut und auf einem LG OLED77C9PLA (webOS 4.10) geprüft.
+Stand: 1.18.0, gebaut und auf einem LG OLED77C9PLA (webOS 4.10) geprüft.
 
 ## Was fertig ist
 
-Das Paket `de.app.glasstv_1.15.0_all.ipk` (48 KB) ist gebaut, installiert und
+Das Paket `de.app.glasstv_1.18.0_all.ipk` ist gebaut, installiert und
 läuft. Technisch ist die App einreichbereit:
 
 | Punkt | Stand |
 |---|---|
 | `appinfo.json` vollständig | ja – id, version, vendor, icons, bgColor, resolution |
 | Icons in LG-Größen | 80×80 und 130×130, geprüft |
-| `requiredMemory` | 320 MB (gemessen: 205 MB Betrieb, 239 MB mit Titelverzeichnis) |
+| `requiredMemory` | 320 MB (gemessen auf dem OLED77C9PLA: 214 MB Betrieb, 217 MB mit Titelverzeichnis, Spitze beim Start 337 MB) |
 | Beenden über Zurück-Taste | ja, `webOS.platformBack()` – LG prüft das |
 | Vollständig mit Fernbedienung bedienbar | ja, inkl. Magic-Remote-Zeiger |
 | Auflösung 1920×1080 | ja |
 | Fehlerfall falsche Zugangsdaten | klare Meldung, führt zurück zur Einrichtung |
 | Debug-Reste im Code | keine |
-| Tests | 36 Core + 7 UI, alle grün |
+| Tests | 55 Core + 16 UI, alle grün |
 
 ## Was noch fehlt – und nur du erledigen kannst
 

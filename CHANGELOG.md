@@ -1,5 +1,76 @@
 # Änderungen
 
+## 1.18.0
+
+**Die Suche liefert jetzt die besten Treffer, nicht die ersten.** Sie nahm die
+ersten 30 Titel, in denen die Anfrage irgendwo vorkam, und brach dann ab — bei
+142.000 Filmen entschied damit die Reihenfolge im Katalog des Anbieters, was
+man zu sehen bekam. „Matrix" lieferte irgendwelche Titel mit „Matrix" darin,
+der gesuchte Film stand dahinter und wurde nie erreicht. Jetzt wird bewertet,
+wo die Anfrage sitzt: exakter Titel, Titelanfang, Wortgrenze, Wortmitte; bei
+gleichem Rang gewinnt der knappere Titel. Auf dem Gerät gemessen steht „Matrix"
+jetzt an erster Stelle, davor „The Matrix" und „Matrix (1999)". Der vollständige
+Durchlauf über alle 174.000 Titel kostet 305–418 ms und läuft nur beim Druck auf
+„Suchen".
+
+Dazu sagt die Überschrift die Wahrheit: „Sender · 30 von 59" statt „erste 30" —
+letzteres verriet nicht, ob 31 oder 4.000 folgen.
+
+**Serien sind erstmals vollständig durchsuchbar.** Die Suche zeigt „Serien" als
+eigene Sparte an, durchsucht hat sie aber nur die Kategorien, die man zuvor
+geöffnet hatte. Wer eine Serie suchte, deren Rubrik er nie geöffnet hatte, bekam
+„Keine Treffer" — ohne Hinweis, dass die Serie sehr wohl da ist. Das
+Titelverzeichnis erfasst jetzt Filme **und** Serien: auf dem Gerät 142.386 Filme
+und **31.602 Serien**. Geprüft bis zum Ende: Suchtreffer → Serie öffnen →
+5 Staffeln, Folgen mit Laufzeit.
+
+**Der Programmführer war eine Sackgasse.** Er zeigte 100 Sender und benannte in
+der Überschrift die übrigen, bot aber weder Suche noch Nachladen. Auf diesem
+Panel haben **1.364 Sender** ein Programm — 1.264 davon waren nicht erreichbar.
+Jetzt mit Suchfeld und „Weitere 100 Sender anzeigen".
+
+**53 MB Dauerbelegung durch eine einzige Zeile.** Beim Vereinheitlichen der
+EPG-Kennungen lief `toLowerCase()` über alle 42.000 Sender der Senderliste. Auf
+dem Fernseher gemessen kostete das 53 MB, die dauerhaft belegt blieben
+(230 → 283 MB, eine Zeile Unterschied, zweimal gemessen). Vereinheitlicht wird
+jetzt erst beim Vergleich — nachgeschlagen werden ohnehin nur die paar Dutzend
+Sender, die auf dem Bildschirm stehen. Der Abgleich bleibt unverändert
+zuverlässig: 1.364 Sender mit Programm, vorher wie nachher.
+
+Zusammen mit einem Zwischenspeicher für die Senderkennungen im XMLTV-Scanner
+(die Normalisierung lief für jede der 206.615 Sendungen statt je Sender):
+
+| | 1.17.0 | 1.18.0 |
+|---|---|---|
+| Prozess im Betrieb | 228 MB | **214 MB** |
+| mit Titelverzeichnis | — | **217 MB** |
+| Spitze beim Start | 419 MB | **337 MB** |
+
+**Kennungen werden beidseitig vereinheitlicht.** Stand in der Senderliste
+`tvg-id="ard.de "` und im XMLTV `channel="ARD.de"`, schlug der Abgleich fehl —
+der Sender hatte still kein Programm, ohne jeden Hinweis, dass es nur an einem
+Leerzeichen lag. (Auf diesem Panel änderte das nichts, beide Seiten passen
+ohnehin; für andere Anbieter ist es der Unterschied zwischen Programm und
+leerem Guide.)
+
+**Das Einrichtungsformular verliert die Eingabe nicht mehr.** Gespeichert wurde
+erst bei Erfolg — nach einem Fehlversuch stand wieder der alte oder gar kein
+Wert im Feld. Wer sich bei einem 60 Zeichen langen Passwort auf der
+Fernbedienungstastatur vertippt hatte, durfte alles neu eingeben.
+
+**Sortierung „Neu hinzugefügt".** Das Feld `added` kam von jedem Panel mit,
+wurde aber nie gelesen. Außerdem tragen „Jahr" und „Bewertung" jetzt einen
+Zweitschlüssel: `Array#sort` ist auf Chromium 53 nicht stabil, und gerade dort
+haben sehr viele Titel denselben Wert — die Liste stand bei jedem Aufbau anders
+da.
+
+**Fokus nach dem Nachladen.** `focusWuenschen('guidemehr')` lief ins Leere, weil
+`button()` seinen Merker mit `btn:` versieht — der Fokus sprang nach jedem
+Nachladen an den Seitenanfang. Auf dem Gerät gefunden; ein Test prüft jetzt für
+jeden festen Fokuswunsch im Quelltext, ob er einen wirklich vergebenen Merker
+trifft.
+
+
 ## 1.17.0
 
 **Detailseite: Das Bild ist jetzt die Bühne.** Vorher endete das Backdrop mit
