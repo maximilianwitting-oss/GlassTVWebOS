@@ -42,6 +42,30 @@
    * Brechungsversatz, den `backdrop-filter` gar nicht kann.
    * Auf dem Geraet gemessen: 60 fps, auch mit der aufwendigsten Variante.
    */
+  /*
+   * TYPO-SKALA – sechs Stufen, Faktor rund 1,25.
+   * Vorher waren es 14 Groessen, davon sechs im Rauschen zwischen 17 und 22px.
+   * Auf 3 m Abstand traegt der Sprung die Hierarchie, nicht die Nuance.
+   * `line-height` stand vorher nur an sechs Stellen ueberhaupt – der Browser
+   * rechnete den Rest mit „normal", weshalb Zeilen je Schriftschnitt anders
+   * fielen. Jetzt traegt jede Stufe ihre Zeilenhoehe mit.
+   */
+  --t-klein:  18px;   /* Hilfstext, Marken, Beschriftungen */
+  --t-basis:  22px;   /* Fliesstext, Chips, Knoepfe, Eingaben */
+  --t-gross:  28px;   /* Sendernamen, Kartentitel, Panelkoepfe */
+  --t-titel:  34px;   /* Abschnittsueberschriften */
+  --t-kopf:   44px;   /* Seitentitel */
+  --t-riesig: 56px;   /* Detailtitel, grosse Zahlen */
+
+  /*
+   * ABSTANDS-RASTER auf Basis 4. Vorher lagen 11 der 25 Werte daneben
+   * (3/6/10/11/14/18/22/26/34/38/90) und bildeten ein zweites Raster mit
+   * Versatz 2 – sichtbar als leicht ungleiche Luft zwischen gleichrangigen
+   * Elementen.
+   */
+  --a1:  4px;  --a2:  8px;  --a3: 12px;  --a4: 16px;
+  --a5: 20px;  --a6: 24px;  --a7: 32px;  --a8: 40px;
+
   --glas-licht:    rgba(255,255,255,0.95);
   --glas-schatten: rgba(0,0,0,0.14);
   --glas-sheen-a:  rgba(255,255,255,0.60);
@@ -81,7 +105,8 @@ html, body {
   color: var(--text);
   font-family: "LG Smart UI", "Helvetica Neue", Arial, sans-serif;
   overflow: hidden;
-  font-size: 20px;
+  font-size: 22px;
+  line-height: 1.45;
 }
 
 #backdrop {
@@ -104,7 +129,7 @@ header {
   display: -webkit-flex; display: flex;
   -webkit-align-items: center; align-items: center;
   /* 64 px ≈ 3,3 % – innerhalb des titelsicheren Bereichs der meisten Geräte. */
-  padding: 38px 64px 18px;
+  padding: 40px 64px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   border-bottom: 1px solid var(--border);
   /* Durchsicht: dieselben Verlaeufe wie #backdrop, am Viewport verankert.
@@ -121,13 +146,15 @@ header {
               0 10px 24px -8px var(--glas-tief);
 }
 
-header h1 { font-size: 34px; font-weight: 800; margin-right: 40px; }
+header h1 { font-size: 34px; font-weight: 800; margin-right: 40px;
+  letter-spacing: -0.01em;
+}
 header .spacer { -webkit-flex: 1; flex: 1; }
 
 nav { display: -webkit-flex; display: flex; }
 
 .tab {
-  padding: 20px 26px; margin: 0 12px 0 0; border-radius: 999px;
+  padding: 20px 24px; margin: 0 12px 0 0; border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
   background: var(--surface);
   border: 1px solid transparent;
@@ -157,7 +184,7 @@ nav { display: -webkit-flex; display: flex; }
 }
 .tab.active:before {
   content: ''; position: absolute; left: 16px; right: 16px; bottom: 7px;
-  height: 4px; border-radius: 2px;
+  height: 4px; border-radius: 4px;
   background: #8c80f7; background: var(--marke);
 }
 
@@ -195,12 +222,14 @@ main { -webkit-flex: 1; flex: 1; overflow-y: auto; padding: 8px 64px 64px; }
 main::-webkit-scrollbar { width: 0; }
 
 .section-title {
-  font-size: 30px; font-weight: 700; margin: 34px 0 12px;
+  font-size: 34px; font-weight: 700; margin: 32px 0 12px;
   padding-left: 20px; position: relative;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 .section-title:before {
   content: ''; position: absolute; left: 0; top: 7px;
-  width: 6px; height: 28px; border-radius: 3px;
+  width: 6px; height: 28px; border-radius: 4px;
   background: #8c80f7; background: var(--accent);
 }
 
@@ -238,7 +267,7 @@ main::-webkit-scrollbar { width: 0; }
   background: rgba(255, 255, 255, 0.06); background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
   border-radius: 16px; overflow: hidden; cursor: pointer; white-space: normal;
-  padding-bottom: 11px;   /* Luft unter dem Titel – siehe .card .label */
+  padding-bottom: 12px;   /* Luft unter dem Titel – siehe .card .label */
   -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
   /* `box-shadow: inset` wird UNTER dem Inhalt gemalt – das Poster deckt die
      obere Lichtkante vollstaendig ab. Der Rand dagegen liegt aussen. */
@@ -261,7 +290,7 @@ main::-webkit-scrollbar { width: 0; }
    sagt „kein Bild", nicht „kaputt". Das geladene Bild deckt es zu. */
 .poster:before {
   content: '\25B6'; position: absolute; top: 50%; left: 0; right: 0;
-  margin-top: -26px; text-align: center; font-size: 48px;
+  margin-top: -24px; text-align: center; font-size: 56px;
   color: rgba(127, 127, 127, 0.30);
 }
 .poster img {
@@ -273,18 +302,18 @@ main::-webkit-scrollbar { width: 0; }
  * Zweizeiliger Titel mit sauberem Schnitt.
  *
  * `overflow: hidden` klippt an der PADDING-Box, nicht an der Inhaltsbox: Mit
- * `padding-bottom: 11px` ragte die dritte Zeile genau diese 11 Pixel in den
- * sichtbaren Bereich und stand angeschnitten unter dem Titel („… fertig,
+ * einem unteren Innenabstand ragte die dritte Zeile genau um dessen Höhe in
+ * den sichtbaren Bereich und stand angeschnitten unter dem Titel („… fertig,
  * ⟨tot (2019)⟩"). `-webkit-line-clamp` setzt zwar die Auslassungspunkte,
  * begrenzt die Höhe aber nicht.
  *
  * Deshalb: unten kein Innenabstand, Höhe exakt Innenabstand oben + zwei
- * Zeilen (11 + 2×26 = 63). Die Luft zur Kartenkante gibt die Karte selbst.
+ * Zeilen (12 + 2×28 = 68). Die Luft zur Kartenkante gibt die Karte selbst.
  */
 .card .label {
-  padding: 11px 14px 0; font-size: 20px; line-height: 26px;
+  padding: 12px 16px 0; font-size: 22px; line-height: 28px;
   word-wrap: break-word;   /* Titel wie SERIE_4K_3840P_DOLBY sind ein Token */
-  height: 63px; max-height: 63px; overflow: hidden;
+  height: 68px; max-height: 68px; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   /* Lichtkante an der Naht Poster/Titelfeld – liest sich als zweite
      Glasflaeche, die unter dem Bild hervorschaut. */
@@ -298,9 +327,9 @@ main::-webkit-scrollbar { width: 0; }
    Designs unsichtbar (1,00:1), das ▶-Zeichen schwebte frei. */
 .card.wide .poster { padding-top: 56.25%; }
 /* Senderlogos sind keine Poster: vollständig zeigen, nicht beschneiden. */
-.card.wide .poster img { object-fit: contain; padding: 14px; }
+.card.wide .poster img { object-fit: contain; padding: 16px; }
 .card.wide .sub {
-  padding: 0 14px 8px; font-size: 18px; color: #a9a4bd; color: var(--text-dim);
+  padding: 0 16px 8px; font-size: 18px; color: #a9a4bd; color: var(--text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
@@ -308,14 +337,15 @@ main::-webkit-scrollbar { width: 0; }
 .channel {
   display: -webkit-flex; display: flex;
   -webkit-align-items: center; align-items: center;
-  padding: 18px 24px; margin-bottom: 12px;
+  padding: 20px 24px; margin-bottom: 12px;
   background: rgba(255, 255, 255, 0.06); background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
-  border-radius: 14px; cursor: pointer; font-size: 20px;
+  border-radius: 16px; cursor: pointer; font-size: 22px;
   -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
   position: relative;
   box-shadow: inset 0 1px 0 var(--glas-licht),
               inset 0 -1px 0 var(--glas-schatten);
+  line-height: 1.4;
 }
 
 /* Läuft gerade: Akzentkante links statt Flächentönung – so bleibt der
@@ -323,14 +353,14 @@ main::-webkit-scrollbar { width: 0; }
 .channel.on-air { background: rgba(127, 127, 127, 0.10); }
 .channel.on-air:before {
   content: ''; position: absolute; left: 0; top: 12px; bottom: 12px;
-  width: 5px; border-radius: 0 3px 3px 0;
+  width: 5px; border-radius: 0 4px 4px 0;
   background: #8c80f7; background: var(--marke);
 }
 
 .channel .logo {
-  width: 80px; height: 80px; margin-right: 22px; border-radius: 10px;
+  width: 80px; height: 80px; margin-right: 24px; border-radius: 12px;
   background: rgba(255, 255, 255, 0.12); background: var(--surface-strong);
-  object-fit: contain; padding: 6px;
+  object-fit: contain; padding: 8px;
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
 }
 
@@ -345,29 +375,32 @@ main::-webkit-scrollbar { width: 0; }
 }
 
 .channel .info { -webkit-flex: 1; flex: 1; min-width: 0; overflow: hidden; }
-.channel .name { font-size: 24px; font-weight: 600;
+.channel .name { font-size: 28px; font-weight: 600;
   /* Wie .channel .sub: Lange Namen mit Zusaetzen („… ⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ")
      brachen sonst auf zwei bis drei Zeilen um – die Liste bekam ungleich
      hohe Zeilen. */
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  line-height: 1.3;
 }
 .channel .sub {
-  font-size: 19px; color: #a9a4bd; color: var(--text-dim); margin-top: 4px;
+  font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin-top: 4px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  line-height: 1.4;
 }
 .channel .num {
-  font-size: 21px; color: #a9a4bd; color: var(--text-dim);
-  margin-right: 18px; min-width: 64px; text-align: right;
+  font-size: 22px; color: #a9a4bd; color: var(--text-dim);
+  margin-right: 20px; min-width: 64px; text-align: right;
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
+  line-height: 1.3;
 }
 
 .progress {
   height: 6px; background: rgba(127, 127, 127, 0.28);
-  border-radius: 2px; margin-top: 8px; overflow: hidden;
+  border-radius: 4px; margin-top: 8px; overflow: hidden;
 }
 /* Auf Karten einruecken: Sonst lief der Balken von Kante zu Kante unter
    eingeruecktem Text, und die Kartenrundung schnitt seine Enden zu Keilen. */
-.card .progress { margin: 0 14px 4px; }
+.card .progress { margin: 0 16px 4px; }
 .progress > div { height: 100%; background: #8c80f7; background: var(--accent); }
 
 /*
@@ -380,11 +413,13 @@ main::-webkit-scrollbar { width: 0; }
   font-size: 18px; font-weight: 700;
   position: relative; margin-left: 12px;
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
+  /* Versalien brauchen Luft, sonst verschmelzen sie aus 3 m. */
+  letter-spacing: 0.05em;
 }
-.badge-live { padding: 3px 12px 3px 24px; }
+.badge-live { padding: 4px 12px 4px 24px; }
 /* Der Stern trug bisher dieselbe Klasse wie „LIVE" – samt rotem Leuchtpunkt.
    Ein gemerkter, nicht laufender Sender sah damit aus, als liefe er. */
-.badge-fav { padding: 3px 12px; }
+.badge-fav { padding: 4px 12px; }
 .badge-live:before {
   content: ''; position: absolute; left: 10px; top: 50%; margin-top: -4px;
   width: 8px; height: 8px; border-radius: 50%;
@@ -393,8 +428,8 @@ main::-webkit-scrollbar { width: 0; }
 }
 
 .chip {
-  display: inline-block; padding: 10px 22px; margin: 0 12px 12px 0;
-  border-radius: 999px; font-size: 20px; white-space: nowrap; cursor: pointer;
+  display: inline-block; padding: 12px 24px; margin: 0 12px 12px 0;
+  border-radius: 999px; font-size: 22px; white-space: nowrap; cursor: pointer;
   background: rgba(255, 255, 255, 0.06); background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
   color: #a9a4bd; color: var(--text-dim);
@@ -403,6 +438,7 @@ main::-webkit-scrollbar { width: 0; }
      ergaeben eine schmutzige Flaeche, kein Glas. */
   box-shadow: inset 0 1px 0 var(--glas-licht),
               inset 0 -1px 0 var(--glas-schatten);
+  line-height: 1.3;
 }
 .chip.active {
   background: rgba(127, 127, 127, 0.18);
@@ -411,13 +447,13 @@ main::-webkit-scrollbar { width: 0; }
 }
 .chip.active:before {
   content: ''; position: absolute; left: 14px; right: 14px; bottom: 6px;
-  height: 3px; border-radius: 2px;
+  height: 3px; border-radius: 4px;
   background: #8c80f7; background: var(--marke);
 }
 
 .chips {
   font-size: 0; white-space: nowrap; overflow-x: auto;
-  padding: 14px 12px 16px; margin-left: -12px;
+  padding: 16px 16px 20px; margin-left: -16px;
 }
 
 /*
@@ -448,11 +484,17 @@ main::-webkit-scrollbar { width: 0; }
 .detail-backdrop .scrim {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0;
 }
-.detail-title { font-size: 48px; font-weight: 800; margin: 20px 0 10px; }
-.detail-meta { font-size: 21px; color: #a9a4bd; color: var(--text-dim); margin-bottom: 14px; }
+.detail-title { font-size: 56px; font-weight: 800; margin: 20px 0 12px;
+  line-height: 1.15;
+  /* Grosse Schrift laeuft von Natur aus zu weit – enger stellen. */
+  letter-spacing: -0.015em;
+}
+.detail-meta { font-size: 22px; color: #a9a4bd; color: var(--text-dim); margin-bottom: 16px;
+  line-height: 1.45;
+}
 /* Zeilenlänge begrenzen: 100 Zeichen pro Zeile verliert man auf drei Metern. */
 .detail-plot {
-  font-size: 22px; line-height: 34px; max-width: 900px; margin-bottom: 26px;
+  font-size: 22px; line-height: 34px; max-width: 900px; margin-bottom: 24px;
 }
 .detail-actions { font-size: 0; margin-bottom: 12px; }
 
@@ -469,7 +511,7 @@ main::-webkit-scrollbar { width: 0; }
 }
 
 .panel h2 { font-size: 28px; margin-bottom: 8px; }
-.panel p { color: #a9a4bd; color: var(--text-dim); margin-bottom: 18px; line-height: 1.45; }
+.panel p { color: #a9a4bd; color: var(--text-dim); margin-bottom: 20px; line-height: 1.45; }
 
 /*
  * Fehlermeldung der Anmeldung. Bewusst mit eigener Flaeche statt nur roter
@@ -481,7 +523,7 @@ main::-webkit-scrollbar { width: 0; }
   background: rgba(179, 38, 30, 0.10);
   border: 2px solid rgba(179, 38, 30, 0.45);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 16px 16px;
   margin-bottom: 16px;
 }
 
@@ -489,10 +531,11 @@ main::-webkit-scrollbar { width: 0; }
  * Farbtasten-Legende. Die drei Tasten sind sonst nirgends erklaert und damit
  * praktisch unauffindbar.
  */
-.farbtasten { margin: 34px 4px 8px; opacity: 0.75; }
+.farbtasten { margin: 32px 4px 8px; opacity: 0.75; }
 .farbtaste {
-  display: inline-block; margin-right: 26px; font-size: 18px;
+  display: inline-block; margin-right: 24px; font-size: 18px;
   color: #a9a4bd; color: var(--text-dim);
+  letter-spacing: 0.02em;
 }
 .farbtaste .punkt {
   display: inline-block; width: 12px; height: 12px; border-radius: 50%;
@@ -504,13 +547,16 @@ main::-webkit-scrollbar { width: 0; }
 
 /* Schmale Statuszeile im Suchbildschirm – siehe indexHinweis(). */
 /* Statuszeile mit Knopf daneben – siehe indexHinweis(). */
-.such-status-zeile { margin-bottom: 20px; }
+.such-status-zeile { margin-bottom: 20px;
+  line-height: 1.45;
+}
 .such-status-zeile .such-status { display: inline-block; margin: 0 16px 0 4px; }
 
 .such-status {
-  font-size: 17px;
+  font-size: 18px;
   color: #a9a4bd; color: var(--text-dim);
   margin: 0 0 20px 4px;
+  line-height: 1.45;
 }
 
 /*
@@ -520,22 +566,24 @@ main::-webkit-scrollbar { width: 0; }
  */
 input::-webkit-input-placeholder { color: #a9a4bd; color: var(--text-dim); opacity: 1; }
 
-label { display: block; font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin: 14px 0 6px; }
+label { display: block; font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin: 16px 0 8px; }
 
 input {
-  width: 100%; padding: 14px 16px; font-size: 20px;
+  width: 100%; padding: 16px 16px; font-size: 22px;
   background: rgba(127, 127, 127, 0.12);
   color: #eae7f2; color: var(--text);
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
   border-radius: 12px;
+  line-height: 1.3;
 }
 
 button {
-  display: inline-block; padding: 14px 26px; margin: 0 14px 14px 0;
-  font-size: 20px; font-weight: 600;
+  display: inline-block; padding: 16px 24px; margin: 0 16px 16px 0;
+  font-size: 22px; font-weight: 600;
   background: #8c80f7; background: var(--accent);
   color: #12101f; color: var(--on-accent);
   border: 1px solid transparent; border-radius: 12px; cursor: pointer;
+  line-height: 1.3;
 }
 
 button.ghost {
@@ -574,16 +622,20 @@ button.ghost {
 #player, #player-chrome, #player-title, #player-sub, #player-times, #player-hint {
   color: #ffffff;
   color: #cfcbe0;
+  line-height: 1.3;
 }
-#player-title { font-size: 40px; font-weight: 700; text-shadow: 0 2px 12px rgba(0,0,0,0.8); }
-#player-sub { font-size: 22px; color: #cfcbe0; margin-top: 6px; }
+#player-title { font-size: 44px; font-weight: 700; text-shadow: 0 2px 12px rgba(0,0,0,0.8);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+#player-sub { font-size: 22px; color: #cfcbe0; margin-top: 8px; }
 
 #player-scrub {
   height: 9px; background: rgba(255, 255, 255, 0.28);
-  border-radius: 5px; margin-bottom: 18px; overflow: visible;
+  border-radius: 4px; margin-bottom: 20px; overflow: visible;
 }
 #player-scrub > div {
-  height: 100%; width: 0; position: relative; border-radius: 5px;
+  height: 100%; width: 0; position: relative; border-radius: 4px;
   background: #8c80f7; background: var(--accent);
 }
 /* Ohne Knopf am Ende ist beim Spulen nicht zu erkennen, wo man steht. */
@@ -592,8 +644,12 @@ button.ghost {
   width: 18px; height: 18px; border-radius: 50%; background: #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
 }
-#player-times { font-size: 20px; color: #cfcbe0; margin-bottom: 10px; }
-#player-hint { text-shadow: 0 2px 8px rgba(0,0,0,0.9); font-size: 20px; color: #a9a4bd; color: var(--text-dim); }
+#player-times { font-size: 22px; color: #cfcbe0; margin-bottom: 12px;
+  line-height: 1.3;
+}
+#player-hint { text-shadow: 0 2px 8px rgba(0,0,0,0.9); font-size: 22px; color: #a9a4bd; color: var(--text-dim);
+  line-height: 1.4;
+}
 
 /* ---------------------------------------------------------------- Status ---- */
 
@@ -603,7 +659,7 @@ button.ghost {
   -webkit-transform: translateX(-50%); transform: translateX(-50%);
   background: rgba(0, 0, 0, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 14px; padding: 18px 32px; font-size: 22px; text-align: center;
+  border-radius: 16px; padding: 20px 32px; font-size: 22px; text-align: center;
   z-index: 80; display: none; max-width: 80%;
 }
 #toast.show { display: block; }
@@ -614,10 +670,12 @@ button.ghost {
   padding: 100px 20px; color: #a9a4bd; color: var(--text-dim);
   font-size: 22px; line-height: 1.55;
 }
-.empty strong { display: block; color: #eae7f2; color: var(--text); font-size: 30px; margin-bottom: 14px; }
+.empty strong { display: block; color: #eae7f2; color: var(--text); font-size: 34px; margin-bottom: 16px;
+  line-height: 1.25;
+}
 
 .spinner {
-  width: 68px; height: 68px; margin: 90px auto 22px;
+  width: 68px; height: 68px; margin: 88px auto 24px;
   border: 5px solid rgba(127, 127, 127, 0.25);
   border-top-color: #8c80f7; border-top-color: var(--accent);
   border-radius: 50%;
@@ -629,12 +687,14 @@ button.ghost {
   display: inline-block; vertical-align: middle; margin: 0 12px 0 4px;
 }
 .loading-text {
-  text-align: center; font-size: 24px;
+  text-align: center; font-size: 28px;
   color: #a9a4bd; color: var(--text-dim);
+  line-height: 1.35;
 }
 .loading-sub {
-  text-align: center; font-size: 19px; margin-top: 8px; opacity: 0.75;
+  text-align: center; font-size: 18px; margin-top: 8px; opacity: 0.75;
   color: #a9a4bd; color: var(--text-dim);
+  line-height: 1.45;
 }
 
 @-webkit-keyframes spin { to { -webkit-transform: rotate(360deg); } }
@@ -642,12 +702,12 @@ button.ghost {
 
 /* ------------------------------------------------------------- Profile ---- */
 
-.gate { text-align: center; padding: 90px 20px; }
+.gate { text-align: center; padding: 88px 20px; }
 .gate-title { font-size: 44px; font-weight: 800; margin-bottom: 44px; }
 .gate-row { font-size: 0; }
 
 .gate-profile {
-  display: inline-block; vertical-align: top; margin: 0 22px;
+  display: inline-block; vertical-align: top; margin: 0 24px;
   padding: 20px; border-radius: 20px; cursor: pointer;
   -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
 }
@@ -670,8 +730,8 @@ button.ghost {
 
 .gate-avatar {
   width: 132px; height: 132px; line-height: 132px; border-radius: 50%;
-  font-size: 54px; font-weight: 800; color: #fff !important;
-  margin: 0 auto 14px;
+  font-size: 56px; font-weight: 800; color: #fff !important;
+  margin: 0 auto 16px;
 }
 
 .gate-name { font-size: 22px; }
@@ -683,29 +743,35 @@ button.ghost {
 
 .stat-tile {
   display: inline-block; vertical-align: top; width: 260px;
-  margin: 0 18px 18px 0; padding: 22px 20px;
+  margin: 0 20px 20px 0; padding: 24px 20px;
   background: rgba(255, 255, 255, 0.06); background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
   border-radius: 16px; text-align: center;
 }
-.stat-value { font-size: 44px; font-weight: 800; line-height: 1.1; }
-.stat-label { font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin-top: 6px; }
+.stat-value { font-size: 44px; font-weight: 800; line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.stat-label { font-size: 18px; color: #a9a4bd; color: var(--text-dim); margin-top: 8px;
+  letter-spacing: 0.03em;
+}
 
-.week { font-size: 0; margin: 10px 0 6px; }
+.week { font-size: 0; margin: 12px 0 8px; }
 .week-day {
-  display: inline-block; vertical-align: bottom; width: 92px; margin-right: 14px;
+  display: inline-block; vertical-align: bottom; width: 92px; margin-right: 16px;
   text-align: center;
 }
 .week-bar {
   width: 100%; background: rgba(127, 127, 127, 0.25);
-  border-radius: 6px 6px 0 0; margin-bottom: 8px;
+  border-radius: 8px 8px 0 0; margin-bottom: 8px;
 }
 .week-bar.on { background: #8c80f7; background: var(--accent); }
 .week-label { font-size: 18px; color: #a9a4bd; color: var(--text-dim); }
 .week-count { font-size: 18px; margin-bottom: 4px; }
 
 .bar-line { margin-bottom: 12px; }
-.bar-head { font-size: 20px; margin-bottom: 6px; }
+.bar-head { font-size: 22px; margin-bottom: 8px;
+  line-height: 1.4;
+}
 .bar-track {
   height: 8px; background: rgba(127, 127, 127, 0.25);
   border-radius: 4px; overflow: hidden;

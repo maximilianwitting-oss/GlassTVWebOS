@@ -36,6 +36,19 @@ aus. Jetzt bleiben Ton und Sättigung erhalten, gesenkt wird nur die Helligkeit,
 bis der Kontrast gegen den tatsächlichen Grund des Designs 4,5:1 erreicht.
 Geprüft: 48 Design/Akzent-Paare, keines darunter.
 
+**Typografie und Abstände folgen jetzt einem System.** Vorher: 14 Schriftgrößen,
+davon sechs im Rauschen zwischen 17 und 22 px; `line-height` stand an nur sechs
+Stellen, den Rest rechnete der Browser mit „normal"; `letter-spacing` kam kein
+einziges Mal vor; 25 Abstandswerte, elf davon außerhalb des Vierer-Rasters;
+elf Radien.
+
+Jetzt: sechs Schriftstufen (18/22/28/34/44/56, Faktor rund 1,25), jede mit
+eigener Zeilenhöhe; Abstände ausschließlich als Vielfache von 4; sechs Radien.
+Große Schrift läuft enger, Versalien weiter. Der Fließtext wächst von 20 auf
+22 px — auf drei Meter Abstand war er zu klein. Ein Test hält das System fest,
+inklusive der Rechnung für die feste Kartenhöhe (Innenabstand + zwei Zeilen);
+ohne sie stünde die dritte Zeile wieder angeschnitten da.
+
 **Ein echter Layoutfehler:** `.grid` fehlte `margin-right`. Die Inhaltsbox war
 dadurch 1780 statt 1792 px, die siebte Karte brach um — das Raster zeigte sechs
 Spalten, obwohl es auf sieben ausgelegt ist.

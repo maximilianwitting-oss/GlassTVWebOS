@@ -211,6 +211,64 @@ test('Akzente auf hellen Designs: Kontrast und Buntheit', function () {
     'applyTheme dunkelt Akzente noch mit der alten Kanal-Skalierung ab');
 });
 
+
+test('Designsystem: Skalen werden eingehalten', function () {
+  /*
+   * Vorher: 14 Schriftgroessen (sechs davon im Rauschen zwischen 17 und 22px),
+   * 25 Abstandswerte mit 11 ausserhalb des Vierer-Rasters, 11 Radien.
+   * Der Test haelt das System fest – ohne ihn laeuft es beim naechsten
+   * Detail wieder auseinander.
+   */
+  var css = fs.readFileSync(path.join(SRC, 'style.css'), 'utf8');
+  var ohneKommentare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  function werte(eigenschaften) {
+    var gefunden = {};
+    var re = new RegExp('\\b(' + eigenschaften + ')\\s*:([^;{}]*)', 'g');
+    var m;
+    while ((m = re.exec(ohneKommentare)) !== null) {
+      var px = m[2].match(/-?\d+px/g) || [];
+      for (var i = 0; i < px.length; i++) gefunden[Math.abs(parseInt(px[i], 10))] = true;
+    }
+    return Object.keys(gefunden).map(Number).sort(function (a, b) { return a - b; });
+  }
+
+  // Schriftgroessen: genau die sechs Stufen der Skala.
+  var erlaubtSchrift = [18, 22, 28, 34, 44, 56];
+  var schrift = werte('font-size');
+  for (var i = 0; i < schrift.length; i++) {
+    assert.ok(erlaubtSchrift.indexOf(schrift[i]) >= 0,
+      'Schriftgroesse ausserhalb der Skala: ' + schrift[i] + 'px');
+  }
+
+  // Abstaende: alles Vielfache von 4.
+  var abstand = werte('padding|margin|padding-top|padding-bottom|padding-left|' +
+    'padding-right|margin-top|margin-bottom|margin-left|margin-right');
+  for (var j = 0; j < abstand.length; j++) {
+    assert.strictEqual(abstand[j] % 4, 0,
+      'Abstand ausserhalb des Vierer-Rasters: ' + abstand[j] + 'px');
+  }
+
+  // Radien: sechs Stufen, 999 fuer Pillen.
+  var erlaubtRadius = [4, 8, 12, 16, 20, 999];
+  var radius = werte('border-radius');
+  for (var k = 0; k < radius.length; k++) {
+    assert.ok(erlaubtRadius.indexOf(radius[k]) >= 0,
+      'Radius ausserhalb der Skala: ' + radius[k] + 'px');
+  }
+
+  // Die feste Kartenhoehe muss zur Zeilenhoehe passen: Innenabstand + 2 Zeilen.
+  var label = /\.card \.label \{[^}]*\}/.exec(ohneKommentare)[0];
+  var oben = /padding:\s*(\d+)px/.exec(label);
+  var zeile = /line-height:\s*(\d+)px/.exec(label);
+  // `[;{\s]` davor: sonst trifft das Muster auch „line-height".
+  var hoehe = /[;{\s]height:\s*(\d+)px/.exec(label);
+  assert.ok(oben && zeile && hoehe, 'Kartentitel ohne feste Masse');
+  assert.strictEqual(Number(hoehe[1]), Number(oben[1]) + 2 * Number(zeile[1]),
+    'Kartenhoehe passt nicht zu Innenabstand + zwei Zeilen – die dritte Zeile ' +
+    'wuerde angeschnitten sichtbar');
+});
+
 test('appinfo.json ist gültig und vollständig', function () {
   var info = JSON.parse(fs.readFileSync(path.join(SRC, 'appinfo.json'), 'utf8'));
   assert.strictEqual(info.id, 'de.app.glasstv');
