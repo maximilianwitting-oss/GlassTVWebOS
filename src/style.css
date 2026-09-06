@@ -63,6 +63,18 @@
    * Versatz 2 – sichtbar als leicht ungleiche Luft zwischen gleichrangigen
    * Elementen.
    */
+  /*
+   * BEWEGUNG. Drei Kurven, mehr braucht es nicht. Die Dauern richten sich
+   * nach der Tastenwiederholung der Fernbedienung (120–150 ms): Laengere
+   * Uebergaenge stapeln sich beim Halten der Pfeiltaste, und die Liste
+   * beginnt zu schwimmen. Animiert werden nur `transform` und `opacity` –
+   * `box-shadow` erzwingt ein Neuzeichnen je Bild und ruckelt bei 30 Zeilen.
+   */
+  --kurve-ein:  cubic-bezier(0.2, 0, 0.2, 1);   /* hereinkommen */
+  --kurve-aus:  cubic-bezier(0.4, 0, 1, 1);     /* hinausgehen  */
+  --dauer-ein:  160ms;
+  --dauer-aus:  110ms;
+
   --a1:  4px;  --a2:  8px;  --a3: 12px;  --a4: 16px;
   --a5: 20px;  --a6: 24px;  --a7: 32px;  --a8: 40px;
 
@@ -205,6 +217,8 @@ nav { display: -webkit-flex; display: flex; }
               0 6px 18px var(--fokus-schatten);
   -webkit-transform: scale(1.05); transform: scale(1.05);
   position: relative; z-index: 5;
+  -webkit-transition: -webkit-transform var(--dauer-ein) var(--kurve-ein);
+          transition:         transform var(--dauer-ein) var(--kurve-ein);
 }
 
 /*
@@ -222,7 +236,9 @@ main { -webkit-flex: 1; flex: 1; overflow-y: auto; padding: 8px 64px 64px; }
 main::-webkit-scrollbar { width: 0; }
 
 .section-title {
-  font-size: 34px; font-weight: 700; margin: 32px 0 12px;
+  /* 48 oben zu 24 unten (8 + 16 Regalpolster) = Verhaeltnis 2,0. Darunter
+     gruppiert das Auge die Ueberschrift zum Block DARUEBER. */
+  font-size: 34px; font-weight: 700; margin: 48px 0 8px;
   padding-left: 20px; position: relative;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -251,6 +267,13 @@ main::-webkit-scrollbar { width: 0; }
   padding: 16px 16px 20px; margin-left: -16px; margin-right: -16px;
   font-size: 0;
 }
+/* Zaehlt zur scrollbaren Breite – anders als `padding-right`, das Blink 53
+   im Scrollbereich ignoriert. Ohne das fehlt der letzten Karte die halbe
+   Ringbreite, und `revealFocus` kann nicht weiterscrollen. */
+.row:after, .chips:after {
+  content: ''; display: inline-block; width: 16px; height: 1px;
+  vertical-align: top;
+}
 .row::-webkit-scrollbar { height: 0; }
 
 /* `margin-right` MUSS mit: Ohne es ist die Inhaltsbox 1780 statt 1792 px, und
@@ -268,7 +291,8 @@ main::-webkit-scrollbar { width: 0; }
   border: 1px solid rgba(255, 255, 255, 0.12); border: 1px solid var(--border);
   border-radius: 16px; overflow: hidden; cursor: pointer; white-space: normal;
   padding-bottom: 12px;   /* Luft unter dem Titel – siehe .card .label */
-  -webkit-transition: -webkit-transform 120ms ease; transition: transform 120ms ease;
+  -webkit-transition: -webkit-transform var(--dauer-aus) var(--kurve-aus);
+          transition:         transform var(--dauer-aus) var(--kurve-aus);
   /* `box-shadow: inset` wird UNTER dem Inhalt gemalt – das Poster deckt die
      obere Lichtkante vollstaendig ab. Der Rand dagegen liegt aussen. */
   border-top-color: var(--glas-licht);
@@ -296,6 +320,10 @@ main::-webkit-scrollbar { width: 0; }
 .poster img {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
   object-fit: cover; z-index: 1;
+  /* Der Zoom traegt keine Information und darf deshalb langsamer sein –
+     das macht den Fokuswechsel „teurer", ohne die Reaktion zu verzoegern. */
+  -webkit-transition: -webkit-transform 260ms var(--kurve-ein);
+          transition:         transform 260ms var(--kurve-ein);
 }
 
 /*
@@ -395,37 +423,88 @@ main::-webkit-scrollbar { width: 0; }
 }
 
 .progress {
-  height: 6px; background: rgba(127, 127, 127, 0.28);
+  height: 8px;                      /* 6 -> 8: 5,8 statt 4,4 Bogenminuten */
+  background: rgba(127, 127, 127, 0.45);
   border-radius: 4px; margin-top: 8px; overflow: hidden;
+  /* Die Kontur macht die 100-%-Marke sichtbar – erst dadurch ist der Balken
+     eine Mengenangabe und nicht nur ein Strich. Die Spur allein erreichte
+     gegen die Kartenflaeche nur 1,3:1. */
+  box-shadow: inset 0 0 0 1px var(--border);
 }
+/* Ein Balken ueber 1700px ist keine Mengenangabe mehr. */
+.channel .progress { max-width: 420px; }
 /* Auf Karten einruecken: Sonst lief der Balken von Kante zu Kante unter
    eingeruecktem Text, und die Kartenrundung schnitt seine Enden zu Keilen. */
 .card .progress { margin: 0 16px 4px; }
-.progress > div { height: 100%; background: #8c80f7; background: var(--accent); }
+.progress > div { height: 100%; background: #8c80f7; background: var(--accent);
+  border-radius: 4px;
+}
 
 /*
  * 18px statt 14: Das war die kleinste Schrift der App – ausgerechnet bei einem
  * Statuszeichen, das man aus drei Metern im Vorbeischauen erfassen soll.
  */
-.badge-live, .badge-fav {
-  color: #ffffff;
-  display: inline-block; background: rgba(0, 0, 0, 0.5); border-radius: 999px;
-  font-size: 18px; font-weight: 700;
-  position: relative; margin-left: 12px;
+.badge-live, .badge-fav, .marke {
+  display: inline-block; vertical-align: middle;
+  border-radius: 8px;
+  font-size: 18px; font-weight: 700; line-height: 24px;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  white-space: nowrap; margin-left: 12px;
   -webkit-flex: 0 0 auto; flex: 0 0 auto;
-  /* Versalien brauchen Luft, sonst verschmelzen sie aus 3 m. */
-  letter-spacing: 0.05em;
 }
-.badge-live { padding: 4px 12px 4px 24px; }
+
+/*
+ * Drei bedeutungstragende Farben, mehr nicht: --live (fest rot) heisst
+ * „jetzt", --marke (Akzent) heisst „ausgewaehlt/gemerkt", neutral ist alles
+ * Sachliche. Der Fokusring ist davon getrennt und immer neutral – „hier
+ * stehst du" und „das laeuft gerade" sind so nie zu verwechseln.
+ *
+ * Die vorherige schwarze Pille war auf hellen Designs das einzige fast-
+ * schwarze Element der Seite und auf OLED-Schwarz unsichtbar: dieselbe
+ * Deklaration lieferte an beiden Enden das falsche Ergebnis.
+ */
+.badge-live, .marke.live {
+  padding: 4px 12px;
+  background: #ff4d4d; background: var(--live);
+  color: #ffffff;
+}
+
+/* Sachmarken (4K, HD, Jahr): neutral, hoechstens zwei je Eintrag – sonst
+   wird das Bild zum Aufkleberalbum. */
+.marke.sach {
+  padding: 4px 12px;
+  background: rgba(127, 127, 127, 0.22);
+  color: #5a5670; color: var(--text-dim);
+  border: 1px solid var(--border);
+  font-weight: 600; letter-spacing: 0.04em;
+}
+
+/* „Neu": Kontur statt Flaeche – bemerkenswert, nicht dringend. */
+.marke.neu {
+  padding: 4px 12px; background: transparent;
+  color: #8c80f7; color: var(--marke);
+  box-shadow: inset 0 0 0 2px var(--marke);
+}
+
+/* Marken auf Postern: unten links, wo kein Titel steht. Poster sind beliebig
+   hell – jede Marke braucht dort ihren eigenen Grund. */
+.poster .markenleiste {
+  position: absolute; left: 8px; bottom: 8px; right: 8px; z-index: 2;
+  font-size: 0; text-align: left; pointer-events: none;
+}
+.poster .markenleiste .marke { margin: 0 8px 0 0; box-shadow: 0 2px 8px rgba(0,0,0,0.55); }
+.poster .markenleiste .marke.sach {
+  background: rgba(0, 0, 0, 0.72); color: #ffffff; border-color: transparent;
+}
 /* Der Stern trug bisher dieselbe Klasse wie „LIVE" – samt rotem Leuchtpunkt.
    Ein gemerkter, nicht laufender Sender sah damit aus, als liefe er. */
-.badge-fav { padding: 4px 12px; }
-.badge-live:before {
-  content: ''; position: absolute; left: 10px; top: 50%; margin-top: -4px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: #ff4d4d; background: var(--live);
-  box-shadow: 0 0 8px #ff4d4d;
+.badge-fav {
+  /* Zeichen statt Pille – der Stern IST schon die Form. */
+  padding: 0; background: none;
+  font-size: 28px; line-height: 28px; letter-spacing: 0;
+  color: #8c80f7; color: var(--marke);
 }
+
 
 .chip {
   display: inline-block; padding: 12px 24px; margin: 0 12px 12px 0;
@@ -611,7 +690,10 @@ button.ghost {
   background: -webkit-linear-gradient(top, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.85) 100%);
   background: linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 28%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.85) 100%);
   opacity: 1;
-  -webkit-transition: opacity 250ms ease; transition: opacity 250ms ease;
+  /* Asymmetrisch: Das Einblenden folgt einem Tastendruck und muss sofort
+     kommen; das Ausblenden geschieht von selbst und darf weich sein. */
+  -webkit-transition: opacity 400ms var(--kurve-aus);
+          transition: opacity 400ms var(--kurve-aus);
   display: -webkit-flex; display: flex;
   -webkit-flex-direction: column; flex-direction: column;
   -webkit-justify-content: space-between; justify-content: space-between;
@@ -818,3 +900,92 @@ body.zeiger .focusable:focus {
 /* Alles Anklickbare trägt den Zeiger-Cursor, damit der Magic Remote seine
    Form ändert und Bedienbares von Text unterscheidbar bleibt. */
 .focusable, .card, .channel, .chip, .tab, button { cursor: pointer; }
+
+
+/* ======================================================== Bewegung ======= */
+
+/*
+ * Karten skalieren nicht mehr, sondern heben ab – und das BILD zoomt innen.
+ * Grund: Eine skalierte Karte braucht Ringreserve in jedem scrollenden
+ * Behaelter; der Innenzoom braucht null, weil `.card` ohnehin klippt. Aus
+ * drei Metern wirkt er ausserdem lebendiger als 5 % Kantenwachstum.
+ */
+.card.focusable:focus {
+  -webkit-transform: translate3d(0, -4px, 0);
+          transform: translate3d(0, -4px, 0);
+}
+.card.focusable:focus .poster img {
+  -webkit-transform: scale3d(1.06, 1.06, 1);
+          transform: scale3d(1.06, 1.06, 1);
+}
+/* Senderlogos sind `object-fit: contain` mit Innenabstand – ein Zoom saehe
+   dort nach Verrutschen aus. */
+.card.wide.focusable:focus .poster img {
+  -webkit-transform: none; transform: none;
+}
+
+/* Kleine Bedienelemente wachsen nur leicht: Der Ring traegt die Aussage. */
+.chip.focusable:focus, .tab.focusable:focus, button.focusable:focus {
+  -webkit-transform: scale3d(1.03, 1.03, 1);
+          transform: scale3d(1.03, 1.03, 1);
+}
+
+/*
+ * Gedrueckt. Enter ueber die Fernbedienung loest KEIN :active aus – die
+ * Klasse setzt der Tastenhandler. `:active` bleibt fuer den Zeiger.
+ * Auf einem Geraet, das 200–600 ms zum Neuaufbau braucht, ist das die
+ * einzige sofortige Rueckmeldung auf einen Tastendruck.
+ */
+.focusable.gedrueckt, .focusable:active {
+  box-shadow: 0 0 0 3px var(--fokus-trenn),
+              0 0 0 8px var(--fokus-ring),
+              0 2px 6px var(--fokus-schatten);
+  -webkit-transform: scale3d(0.97, 0.97, 1);
+          transform: scale3d(0.97, 0.97, 1);
+  -webkit-transition-duration: 60ms; transition-duration: 60ms;
+}
+.card.focusable.gedrueckt {
+  -webkit-transform: translate3d(0, -1px, 0) scale3d(0.985, 0.985, 1);
+          transform: translate3d(0, -1px, 0) scale3d(0.985, 0.985, 1);
+}
+
+/* Seitenwechsel: nur ueberblenden, nicht schieben. Ein Chip-Klick baut
+   dieselbe Seite neu auf – eine Bewegung dort liest sich als Flackern. */
+#content.wechsel {
+  -webkit-animation: einblenden 140ms var(--kurve-ein) both;
+          animation: einblenden 140ms var(--kurve-ein) both;
+}
+@-webkit-keyframes einblenden { from { opacity: 0; } to { opacity: 1; } }
+@keyframes einblenden { from { opacity: 0; } to { opacity: 1; } }
+
+/*
+ * „Bewegung reduzieren". `prefers-reduced-motion` gibt es erst ab Chrome 74 –
+ * auf webOS 4 ist die Abfrage wirkungslos, deshalb zusaetzlich ein Schalter
+ * in den Einstellungen.
+ */
+body.ruhig *, body.ruhig *:before, body.ruhig *:after {
+  -webkit-transition: none !important; transition: none !important;
+  -webkit-animation-duration: 1ms !important; animation-duration: 1ms !important;
+}
+body.ruhig .spinner {
+  -webkit-animation: spin 900ms linear infinite !important;
+          animation: spin 900ms linear infinite !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *:before, *:after {
+    -webkit-transition: none !important; transition: none !important;
+    -webkit-animation-duration: 1ms !important; animation-duration: 1ms !important;
+  }
+  .spinner {
+    -webkit-animation: spin 900ms linear infinite !important;
+            animation: spin 900ms linear infinite !important;
+  }
+}
+
+
+/* Einblenden schneller als Ausblenden – siehe #player-chrome. */
+#player-chrome:not(.hidden) {
+  -webkit-transition-duration: 120ms; transition-duration: 120ms;
+  -webkit-transition-timing-function: var(--kurve-ein);
+          transition-timing-function: var(--kurve-ein);
+}

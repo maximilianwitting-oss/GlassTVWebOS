@@ -269,6 +269,54 @@ test('Designsystem: Skalen werden eingehalten', function () {
     'wuerde angeschnitten sichtbar');
 });
 
+
+test('Sachmarken werden aus dem Titel gelesen', function () {
+  /*
+   * IPTV-Titel tragen 4K/HD/Dolby ohnehin im Klartext – oft als hochgestellte
+   * Unicode-Zeichen („⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ"). Als Marke im Poster sind sie aus drei
+   * Metern schneller erfassbar, und der Titel wird kuerzer, statt in der
+   * zweiten Zeile abgeschnitten zu werden.
+   */
+  var quelle = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+  var teil = quelle.slice(quelle.indexOf('function markenAusTitel'),
+                          quelle.indexOf('function card('));
+  assert.ok(teil.length > 0, 'markenAusTitel fehlt');
+  // `eval` hat unter 'use strict' einen eigenen Scope – die Funktion waere
+  // aussen nicht sichtbar. Der Function-Konstruktor gibt sie zurueck.
+  var markenAusTitel = new Function(teil + '; return markenAusTitel;')();
+
+  assert.deepStrictEqual(markenAusTitel('4K-DE - Mayday (2026)'), ['4K']);
+  assert.deepStrictEqual(markenAusTitel('WOW: SKY KRIMI ᴴᴰ'), ['HD']);
+  assert.deepStrictEqual(markenAusTitel('Einfacher Titel'), []);
+  // Hoechstens zwei, sonst wird das Poster zum Aufkleberalbum.
+  var viele = markenAusTitel('UHD Dolby Atmos 2160p HD');
+  assert.ok(viele.length <= 2, 'mehr als zwei Marken: ' + viele.join(','));
+  // 4K schlaegt HD – nicht beides gleichzeitig.
+  assert.ok(markenAusTitel('4K UHD 1080p').indexOf('HD') < 0);
+});
+
+test('Bewegung: keine Dauer ueber der Tastenwiederholung', function () {
+  /*
+   * Die Fernbedienung wiederholt beim Halten alle 120–150 ms. Dauert ein
+   * Uebergang laenger, stapeln sich die Animationen und die Liste schwimmt.
+   * Ausgenommen ist der Posterzoom (260 ms): Er traegt keine Information und
+   * laeuft innerhalb der Karte, verzoegert die Reaktion also nicht.
+   */
+  var css = fs.readFileSync(path.join(SRC, 'style.css'), 'utf8');
+  var ohne = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Nur Bewegung pruefen: Deckkraft-Uebergaenge (Player-Overlay, Toast)
+  // laufen nicht gegen die Tastenwiederholung.
+  var re = /transition[^;]*?transform[^;]*?(\d+)ms/g, m;
+  while ((m = re.exec(ohne)) !== null) {
+    var ms = Number(m[1]);
+    var zeile = ohne.slice(Math.max(0, m.index - 200), m.index);
+    var istPoster = zeile.lastIndexOf('.poster img') > zeile.lastIndexOf('}');
+    if (!istPoster) {
+      assert.ok(ms <= 160, 'Uebergang zu lang: ' + ms + 'ms');
+    }
+  }
+});
+
 test('appinfo.json ist gültig und vollständig', function () {
   var info = JSON.parse(fs.readFileSync(path.join(SRC, 'appinfo.json'), 'utf8'));
   assert.strictEqual(info.id, 'de.app.glasstv');

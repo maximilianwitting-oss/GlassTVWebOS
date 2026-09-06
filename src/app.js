@@ -532,14 +532,42 @@
     return box;
   }
 
-  function card(title, imageUrl, onSelect, wide, fkey) {
+  /**
+   * Sachmarken aus einem Titel lesen (4K, HD, Dolby, Jahr).
+   *
+   * Diese Angaben stehen bei IPTV-Playlisten ohnehin im Titel und
+   * verbrauchen dort Platz, den der eigentliche Name braucht. Als Marke im
+   * Poster gelesen sind sie aus drei Metern schneller erfassbar – und der
+   * Titel wird kuerzer, statt in der zweiten Zeile abgeschnitten zu werden.
+   * Hoechstens zwei je Eintrag, sonst wird das Bild zum Aufkleberalbum.
+   */
+  function markenAusTitel(titel) {
+    var t = String(titel || '');
+    var out = [];
+    if (/(^|[^A-Za-z0-9])(4K|UHD|2160P?|\u2074\u1d37)([^A-Za-z0-9]|$)/i.test(t)) out.push('4K');
+    else if (/(^|[^A-Za-z0-9])(FHD|1080P?|HD|\u1d34\u1d30)([^A-Za-z0-9]|$)/i.test(t)) out.push('HD');
+    if (out.length < 2 && /dolby|atmos|\u1d30\u1d52\u02e1\u1d47\u02b8/i.test(t)) out.push('Dolby');
+    return out;
+  }
+
+  function card(title, imageUrl, onSelect, wide, fkey, marken) {
     var c = element('div', 'card focusable' + (wide ? ' wide' : ''));
     c.tabIndex = 0;
     // Ohne Merker landete der Fokus nach jedem Blick in eine Detailseite
     // wieder am Rasteranfang – bei sieben Kacheln je Reihe jedes Mal neu
     // hinunterhangeln.
     if (fkey) c.setAttribute('data-fkey', 'card:' + fkey);
-    c.appendChild(posterBox(imageUrl, wide));
+    var box = posterBox(imageUrl, wide);
+    var liste = marken || markenAusTitel(title);
+    if (liste && liste.length) {
+      var leiste = element('div', 'markenleiste');
+      for (var mi = 0; mi < liste.length && mi < 2; mi++) {
+        var art = liste[mi] === 'LIVE' ? 'live' : 'sach';
+        leiste.appendChild(element('span', 'marke ' + art, liste[mi]));
+      }
+      box.appendChild(leiste);
+    }
+    c.appendChild(box);
     c.appendChild(element('div', 'label', title));
     c.onclick = onSelect;
     return c;
@@ -1858,7 +1886,8 @@
     }
     var s2 = shelf(ohneEpg ? 'Sender' : 'Jetzt im TV', live, function (ch) {
       var now = Core.nowProgram(programsFor(ch));
-      var c = card(ch.name, ch.logoURL, function () { playChannel(ch); }, true);
+      var c = card(ch.name, ch.logoURL, function () { playChannel(ch); }, true,
+        null, now ? ['LIVE'] : null);
       if (now) {
         c.appendChild(element('div', 'sub', now.title));
         var span = now.end - now.start;
@@ -4265,6 +4294,7 @@
     else if (code === 38) { moveFocus(0, -1); e.preventDefault(); }
     else if (code === 40) { moveFocus(0, 1); e.preventDefault(); }
     else if (code === 13) {
+      gedruecktAn();
       var el2 = document.activeElement;
       if (el2 && el2.tagName === 'INPUT') {
         /*
@@ -4333,6 +4363,38 @@
     return null;
   }
 
+  /**
+   * Zeigerklasse setzen, ohne die uebrigen Body-Klassen zu verwerfen.
+   * `document.body.className = 'zeiger'` loeschte auch `ruhig` – die
+   * Einstellung „Bewegung reduzieren" waere beim ersten Zeigerereignis weg.
+   */
+  function zeigerKlasse(an) {
+    var c = document.body.className.replace(/\s*\bzeiger\b/g, '');
+    document.body.className = an ? (c + ' zeiger') : c;
+  }
+
+  /**
+   * Gedrueckt-Zustand. Enter ueber die Fernbedienung loest KEIN `:active`
+   * aus – auf einem Geraet, das fuer den Neuaufbau 200–600 ms braucht, ist
+   * das die einzige sofortige Rueckmeldung auf einen Tastendruck.
+   */
+  var gedruecktTimer = null;
+  function gedruecktAn() {
+    var a = document.activeElement;
+    if (a && a.className && a.className.indexOf('focusable') >= 0) {
+      a.className = a.className + ' gedrueckt';
+    }
+    if (gedruecktTimer) clearTimeout(gedruecktTimer);
+    // Sicherheitsnetz: `keyup` faellt auf manchen Fernbedienungen aus.
+    gedruecktTimer = setTimeout(gedruecktAus, 180);
+  }
+  function gedruecktAus() {
+    var n = document.querySelectorAll('.gedrueckt');
+    for (var i = 0; i < n.length; i++) {
+      n[i].className = n[i].className.replace(/\s*\bgedrueckt\b/g, '');
+    }
+  }
+
   function initZeiger() {
     document.addEventListener('mouseover', function (e) {
       var ziel = naechstesFokusziel(e.target);
@@ -4352,7 +4414,7 @@
      */
     document.addEventListener('cursorStateChange', function (e) {
       zeigerAktiv = !!(e.detail && e.detail.visibility);
-      document.body.className = zeigerAktiv ? 'zeiger' : '';
+      zeigerKlasse(zeigerAktiv);
       if (!zeigerAktiv) {
         var a = document.activeElement;
         if (!a || a === document.body) ensureFocus();
@@ -4505,6 +4567,7 @@
     document.addEventListener('scroll', lazyAnstossen, true);
 
     document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', gedruecktAus);
 
     var savedSource = load('source', null);
     if (!savedSource) { render(); return; }
