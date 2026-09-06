@@ -1,6 +1,6 @@
 {
   "id": "de.app.glasstv",
-  "version": "1.16.1",
+  "version": "1.17.0",
   "vendor": "Maximilian Witting",
   "type": "web",
   "main": "index.html",

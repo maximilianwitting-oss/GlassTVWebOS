@@ -1,5 +1,50 @@
 # Änderungen
 
+## 1.17.0
+
+**Liquid Glass — ohne `backdrop-filter`.** Der klassische Glas-Effekt braucht
+`backdrop-filter`, das es erst ab Chrome 76 gibt; webOS 4 hat Chromium 53.
+Ersatz ist `background-attachment: fixed`: Der Hintergrund wird am Viewport
+verankert statt am Element, das Element zeigt also genau die Pixel, die
+dahinter liegen — deckend und trotzdem durchsichtig. Die Kopie ist leicht
+versetzt (72 %/−4 % statt 60 %/0 %), was einen Brechungsversatz erzeugt, den
+`backdrop-filter` gar nicht kann. Auf dem Gerät gemessen: **60 fps**, auch mit
+der aufwendigsten Variante.
+
+Dazu Kantenlicht statt Schlagschatten, wo viele Elemente nebeneinander stehen
+(30 Chips mit je 30 px Weichzeichnung ergäben eine schmutzige Fläche), und
+getrennte Glaswerte für helle und dunkle Designs: Auf OLED-Schwarz wäre eine
+weiße Kante bei 0,95 ein grelles Strichgitter.
+
+**Der Fokusring war auf der wichtigsten Liste unsichtbar.** `box-shadow` ist
+eine einzige Eigenschaft — `.channel.on-air` und `.chip.active` standen hinter
+`.focusable:focus` bei gleicher Spezifität und löschten den Ring vollständig.
+Auf dem Gerät gemessen: Eine fokussierte laufende Senderzeile hatte nur noch
+die on-air-Kante. Zustandsmarken zeichnen jetzt mit `:before`, nie mehr mit
+`box-shadow`.
+
+**Der Ring ist neutral statt akzentfarben.** Als Ortsangabe muss er auf allen
+270 Design/Akzent-Kombinationen gleich stark sein: neutral 15–17:1, mit Akzent
+im schlechtesten Fall 3,8:1. Das trennt zugleich die Bedeutungen — Akzent heißt
+„ausgewählt / läuft", neutral heißt „hier stehst du". Der Trennring wächst von
+3 auf 4 px (3 px sind auf 3 m nur 2,2 Bogenminuten).
+
+**Akzentfarben auf hellen Designs.** Die alte Abdunklung skalierte alle
+Farbkanäle und entzog dabei die halbe Sättigung: Violett fiel von 88 % auf
+32 %, Koralle von 100 auf 41 — Violett, Indigo und Schiefer sahen fast gleich
+aus. Jetzt bleiben Ton und Sättigung erhalten, gesenkt wird nur die Helligkeit,
+bis der Kontrast gegen den tatsächlichen Grund des Designs 4,5:1 erreicht.
+Geprüft: 48 Design/Akzent-Paare, keines darunter.
+
+**Ein echter Layoutfehler:** `.grid` fehlte `margin-right`. Die Inhaltsbox war
+dadurch 1780 statt 1792 px, die siebte Karte brach um — das Raster zeigte sechs
+Spalten, obwohl es auf sieben ausgelegt ist.
+
+Außerdem: Profilkacheln bekommen einen Trennring (die Standard-Profilfarbe ist
+identisch mit dem Standardakzent, Kontrast war 1,00), Eingabefelder skalieren
+auch im Zeigermodus nicht mehr (18 px Überhang erzeugten waagerechtes
+Scrollen), und die Regal-Reserven für den Fokusring stimmen jetzt rechnerisch.
+
 ## 1.16.1
 
 **Sprachfilter in drei Stufen** statt an/aus. Die beiden alten Enden lagen weit

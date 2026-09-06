@@ -1,6 +1,6 @@
 {
   "name": "glasstv-webos",
-  "version": "1.16.1",
+  "version": "1.17.0",
   "private": true,
   "description": "GlassTV für LG-Fernseher (webOS) – IPTV-Player, der eigene Playlisten abspielt.",
   "license": "MIT",

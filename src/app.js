@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.16.1';
+  var APP_VERSION = '1.17.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -983,11 +983,14 @@
     var root = document.documentElement;
     if (!root.style.setProperty) return;
 
-    var accent = d.dark ? a.color : darken(a.color, 0.55);
+    var accent = d.dark ? a.color : akzentFuerHell(a.color, d.bg);
 
     root.style.setProperty('--bg', d.bg);
     root.style.setProperty('--accent', accent);
     root.style.setProperty('--accent-dim', hexToRgba(accent, d.dark ? 0.22 : 0.16));
+    // Akzent = Zustandsfarbe, Trennring = Seitengrund.
+    root.style.setProperty('--marke', accent);
+    root.style.setProperty('--fokus-trenn', d.bg);
     if (d.dark) {
       root.style.setProperty('--surface', 'rgba(255,255,255,0.06)');
       root.style.setProperty('--surface-strong', 'rgba(255,255,255,0.12)');
@@ -1000,6 +1003,19 @@
       // Fehlerrot muss auf dunklem Grund aufhellen: Das feste #b3261e lag auf
       // den dunklen Designs bei 2,3:1 – dunkelrote Schrift auf dunklem Grund.
       root.style.setProperty('--fehler', '#ff8a80');
+      root.style.setProperty('--fokus-ring', '#eae7f2');
+      /*
+       * Glaswerte je Helligkeit. Auf dunklem Grund ist die Flaeche HELLER als
+       * der Grund – eine weisse Kante bei 0.95 waere ein grelles Strichgitter
+       * ueber den halben Schirm; 0.42 reicht. Der Schatten muss dagegen
+       * kraeftiger werden, weil auf OLED-Schwarz nur ein starker Abfall
+       * ueberhaupt als Kante gelesen wird.
+       */
+      root.style.setProperty('--glas-licht', 'rgba(255,255,255,0.42)');
+      root.style.setProperty('--glas-schatten', 'rgba(0,0,0,0.45)');
+      root.style.setProperty('--glas-sheen-a', 'rgba(255,255,255,0.10)');
+      root.style.setProperty('--glas-sheen-b', 'rgba(255,255,255,0.03)');
+      root.style.setProperty('--glas-tief', 'rgba(0,0,0,0.60)');
       root.style.setProperty('--fokus-schatten', 'rgba(0,0,0,0.55)');
     } else {
       // Auf hellem Grund tragen weiße Schleier nicht – es braucht dunkle.
@@ -1010,10 +1026,26 @@
       root.style.setProperty('--text-dim', '#5a5670');
       root.style.setProperty('--on-accent', '#ffffff');
       root.style.setProperty('--fehler', '#b3261e');
+      root.style.setProperty('--fokus-ring', '#1b1926');
+      // Auf hellem Grund ist die Flaeche DUNKLER als der Grund: Eine fast
+      // weisse Lichtkante hebt sich klar ab, ein echter Schatten traegt.
+      root.style.setProperty('--glas-licht', 'rgba(255,255,255,0.95)');
+      root.style.setProperty('--glas-schatten', 'rgba(0,0,0,0.14)');
+      root.style.setProperty('--glas-sheen-a', 'rgba(255,255,255,0.60)');
+      root.style.setProperty('--glas-sheen-b', 'rgba(255,255,255,0.00)');
+      root.style.setProperty('--glas-tief', 'rgba(0,0,0,0.16)');
       // Auf hellem Grund traegt ein kraeftiger Schlagschatten nicht – er wirkt
       // wie Schmutz unter der Karte statt wie Hervorhebung.
       root.style.setProperty('--fokus-schatten', 'rgba(0,0,0,0.18)');
     }
+
+    /*
+     * Versetzte Kopie des Backdrops fuer die Kopfleiste. Dieselben Farben,
+     * aber 72/-4/104 statt 60/0/100: dieser Versatz ist der Brechungseffekt.
+     */
+    root.style.setProperty('--glasgrund-versetzt',
+      'radial-gradient(72% 72% at -4% -3%, ' + d.g1 + ', transparent 70%),' +
+      'radial-gradient(72% 72% at 104% 103%, ' + d.g2 + ', transparent 70%)');
 
     document.getElementById('backdrop').style.background =
       'radial-gradient(60% 60% at 0% 0%, ' + d.g1 + ', transparent 70%),' +
@@ -1035,6 +1067,77 @@
   }
 
   /** Farbe abdunkeln – helle Akzente sind auf hellem Grund sonst unlesbar. */
+  /**
+   * Akzent fuer helle Designs abdunkeln.
+   *
+   * Die alte Fassung skalierte alle Kanaele und entzog dabei die halbe
+   * Buntheit: Violett fiel von 88 % auf 32 % Saettigung, Koralle von 100 auf
+   * 41 – auf hellen Designs sahen Violett, Indigo und Schiefer nahezu gleich
+   * aus. Hier bleiben Ton UND Saettigung erhalten; gesenkt wird nur die
+   * Helligkeit, und zwar so weit, bis der Kontrast gegen den TATSAECHLICHEN
+   * Grund des Designs 4,5:1 erreicht. (Gegen reines Weiss zu rechnen genuegt
+   * nicht: Gegen „#f7f7fa" landeten sonst alle Akzente bei 4,2–4,4.)
+   */
+  function akzentFuerHell(hex, grundHex) {
+    var hsl = hexToHsl(hex);
+    if (!hsl) return hex;
+    for (var l = hsl[2]; l >= 5; l -= 1) {
+      var kandidat = hslToHex(hsl[0], hsl[1], l);
+      if (kontrastwert(kandidat, grundHex) >= 4.5) return kandidat;
+    }
+    return hslToHex(hsl[0], hsl[1], 5);
+  }
+
+  function hexToHsl(hex) {
+    var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return null;
+    var r = parseInt(m[1], 16) / 255, g = parseInt(m[2], 16) / 255, b = parseInt(m[3], 16) / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h = 0, sat = 0, l = (max + min) / 2, d = max - min;
+    if (d) {
+      sat = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+    }
+    return [h, sat * 100, l * 100];
+  }
+
+  function hslToHex(h, sat, l) {
+    sat /= 100; l /= 100;
+    var c = (1 - Math.abs(2 * l - 1)) * sat;
+    var x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    var m = l - c / 2, r, g, b;
+    if (h < 60) { r = c; g = x; b = 0; }
+    else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; }
+    else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; }
+    else { r = c; g = 0; b = x; }
+    function t(v) {
+      var q = Math.max(0, Math.min(255, Math.round((v + m) * 255))).toString(16);
+      return q.length < 2 ? '0' + q : q;
+    }
+    return '#' + t(r) + t(g) + t(b);
+  }
+
+  /** WCAG-Kontrast zweier Hex-Farben. */
+  function kontrastwert(a, b) {
+    function lum(hex) {
+      var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+      if (!m) return 0;
+      var teile = [], i, v;
+      for (i = 1; i <= 3; i++) {
+        v = parseInt(m[i], 16) / 255;
+        teile.push(v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+      }
+      return 0.2126 * teile[0] + 0.7152 * teile[1] + 0.0722 * teile[2];
+    }
+    var l1 = lum(a), l2 = lum(b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  }
+
   function darken(hex, factor) {
     var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
     if (!m) return hex;
@@ -3191,7 +3294,9 @@
         // Dieselbe Dimmung wie in applyTheme: Die Rohfarbe ist auf hellem
         // Grund nicht zu sehen – ausgerechnet beim Rahmen, an dem man die
         // Farbe erkennen soll.
-        c.style.borderColor = aktuellesDesignIstDunkel() ? a.color : darken(a.color, 0.55);
+        c.style.borderColor = aktuellesDesignIstDunkel()
+          ? a.color
+          : akzentFuerHell(a.color, designById(state.settings.design).bg);
         c.onclick = function () {
           state.settings.accent = a.id; save('settings', state.settings);
           applyTheme(); render();

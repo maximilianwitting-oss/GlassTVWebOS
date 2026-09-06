@@ -188,6 +188,29 @@ test('Filterstufe: alte Einstellung wird migriert', function () {
   assert.ok(quelle.indexOf("hilfe:") > 0, 'Stufen ohne Erklaerungstext');
 });
 
+
+test('Akzente auf hellen Designs: Kontrast und Buntheit', function () {
+  /*
+   * Die alte Abdunklung skalierte alle Farbkanaele und entzog dabei die halbe
+   * Saettigung – Violett fiel von 88 % auf 32 %, und auf hellen Designs sahen
+   * Violett, Indigo und Schiefer nahezu gleich aus. Jetzt bleiben Ton und
+   * Saettigung erhalten, gesenkt wird nur die Helligkeit, bis der Kontrast
+   * gegen den TATSAECHLICHEN Grund des Designs 4,5:1 erreicht.
+   */
+  var quelle = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+  assert.ok(quelle.indexOf('function akzentFuerHell') > 0, 'akzentFuerHell fehlt');
+  assert.ok(quelle.indexOf('akzentFuerHell(a.color, d.bg)') > 0,
+    'applyTheme nutzt die neue Berechnung nicht');
+  assert.ok(quelle.indexOf('kontrastwert(kandidat, grundHex) >= 4.5') > 0,
+    'die Kontrastgrenze wird nicht geprueft');
+
+  // Die alte Fassung darf fuer Akzente nicht mehr benutzt werden.
+  var stelle = quelle.indexOf('var accent = d.dark');
+  var zeile = quelle.slice(stelle, stelle + 120);
+  assert.ok(zeile.indexOf('darken(') < 0,
+    'applyTheme dunkelt Akzente noch mit der alten Kanal-Skalierung ab');
+});
+
 test('appinfo.json ist gültig und vollständig', function () {
   var info = JSON.parse(fs.readFileSync(path.join(SRC, 'appinfo.json'), 'utf8'));
   assert.strictEqual(info.id, 'de.app.glasstv');
