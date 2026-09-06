@@ -1420,7 +1420,10 @@
       count: entries.length, vodSeconds: 0, finished: 0, channels: 0,
       streak: 0, days: [], groups: [], longest: null, longestSeconds: 0,
     };
-    var dayCounts = {}, groupCounts = {};
+    // Kategorienamen kommen aus der Playlist: Mit einem einfachen {} lieferte
+    // `groupCounts['constructor']` den geerbten Konstruktor, die Addition wurde
+    // zur Zeichenkette und der Balken bekam `width: NaN%`.
+    var dayCounts = {}, groupCounts = Object.create(null);
 
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
@@ -1459,7 +1462,15 @@
     for (var g in groupCounts) {
       if (Object.prototype.hasOwnProperty.call(groupCounts, g)) pairs.push({ name: g, count: groupCounts[g] });
     }
-    pairs.sort(function (a, b) { return b.count - a.count; });
+    /*
+     * Zweitschluessel: `Array#sort` ist auf Chromium 53 nicht stabil (das kam
+     * erst mit V8 7.0). Bei gleichem Zaehlerstand – im Normalfall die Mehrzahl
+     * der Kategorien – wechselte die Top-5-Liste sonst zwischen zwei Besuchen,
+     * ohne dass sich etwas geaendert haette.
+     */
+    pairs.sort(function (a, b) {
+      return (b.count - a.count) || (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0));
+    });
     out.groups = pairs.slice(0, 5);
     return out;
   }
@@ -1485,14 +1496,14 @@
     }
     var hours = Math.floor(st.vodSeconds / 3600);
     tiles.appendChild(hours >= 1
-      ? tile(String(hours), 'Stunden gesehen')
+      ? tile(String(hours), 'Fortschritt insgesamt')
       : tile(String(Math.floor(st.vodSeconds / 60)), 'Minuten gesehen'));
     tiles.appendChild(tile(String(st.finished), 'Zu Ende gesehen'));
     tiles.appendChild(tile(String(st.streak), 'Tage am Stück'));
     tiles.appendChild(tile(String(st.channels), 'Verschiedene Sender'));
     el.content.appendChild(tiles);
 
-    el.content.appendChild(element('div', 'section-title', 'Diese Woche'));
+    el.content.appendChild(element('div', 'section-title', 'Letzte 7 Tage'));
     var max = 1;
     for (var i = 0; i < st.days.length; i++) max = Math.max(max, st.days[i].count);
     var week = element('div', 'week');
@@ -1875,6 +1886,24 @@
 
   // ---- Start ----
 
+  /**
+   * Serie und Folge zu einer Folgen-Kennung finden ("<serienID>|e|<sid>").
+   * Nur moeglich, wenn die Serie geladen ist – sonst bleibt es beim
+   * Einzelabspielen, was immer noch besser ist als gar nichts.
+   */
+  function serienKontextFuer(id) {
+    var teile = String(id || '').split('|e|');
+    if (teile.length !== 2) return null;
+    var serie = findById(teile[0]);
+    if (!serie || !serie.episodes || !serie.episodes.length) return null;
+    for (var i = 0; i < serie.episodes.length; i++) {
+      if (serie.episodes[i].id === id) {
+        return { series: serie, episode: serie.episodes[i] };
+      }
+    }
+    return null;
+  }
+
   function renderHome() {
     var lib = state.library;
     var cont = resumable();
@@ -1891,8 +1920,14 @@
           var url = p.url || streamUrlOf(findById(p.id)) ||
             streamUrlAusId(p.id, p.ext, p.quelle);
           if (!url) return toast('Dieser Titel lässt sich gerade nicht öffnen.', 6000);
-          playItem(p.title, url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position, null,
-            { image: p.image, group: p.group });
+          /*
+           * Serienkontext mitgeben: Ohne ihn steigt `playNextEpisode` aus und
+           * der Player schliesst sich am Folgenende. Dieselbe Folge, aus der
+           * Serienseite gestartet, lief weiter – ausgerechnet der abendliche
+           * Weg ueber „Weiterschauen" war der schlechtere.
+           */
+          playItem(p.title, url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position,
+            serienKontextFuer(p.id), { image: p.image, group: p.group, ext: p.ext });
         }, true);
         c.appendChild(progressBar(p.position / p.duration));
         return c;
@@ -1901,12 +1936,41 @@
     }
 
     // Jetzt im TV: Sender mit laufender Sendung, Favoriten zuerst.
-    var live = [];
-    for (var i = 0; i < lib.channels.length && live.length < 20; i++) {
-      var ch = lib.channels[i];
-      if (Core.nowProgram(programsFor(ch))) live.push(ch);
+    /*
+     * „Zuletzt gesehen": Live-Besuche stehen laengst im Verlauf (saveProgress
+     * schreibt sie mit Titel, Bild und Kategorie), wurden aber nirgends
+     * gezeigt – `resumable()` schliesst Live aus, weil es keine Position gibt.
+     * Das Regal kostet keine zusaetzlichen Daten und loest zugleich „wie finde
+     * ich den Sender wieder, den ich gestern geschaut habe".
+     */
+    var zuletztLive = [];
+    var verlauf = progressList();
+    for (var vi = 0; vi < verlauf.length && zuletztLive.length < 20; vi++) {
+      if (verlauf[vi].kind !== 'live') continue;
+      var treffer = findById(verlauf[vi].id);
+      if (treffer) zuletztLive.push(treffer);
     }
-    live.sort(function (a, b) { return (isFavorite(b.id) ? 1 : 0) - (isFavorite(a.id) ? 1 : 0); });
+    var sZuletzt = shelf('Zuletzt gesehen', zuletztLive, function (ch) {
+      return card(ch.name, ch.logoURL, function () { playChannel(ch); }, true,
+        'zuletzt:' + ch.id);
+    });
+    if (sZuletzt) el.content.appendChild(sZuletzt);
+
+    /*
+     * Favoriten ZUERST suchen, nicht hinterher sortieren. Die Schleife brach
+     * nach 20 Treffern ab und sortierte erst danach – bei 42.000 Sendern
+     * stammten diese 20 immer vom Listenanfang, der eigene Lieblingssender
+     * tauchte praktisch nie auf.
+     */
+    var live = [], i, ch;
+    for (i = 0; i < lib.channels.length && live.length < 20; i++) {
+      ch = lib.channels[i];
+      if (isFavorite(ch.id) && Core.nowProgram(programsFor(ch))) live.push(ch);
+    }
+    for (i = 0; i < lib.channels.length && live.length < 20; i++) {
+      ch = lib.channels[i];
+      if (!isFavorite(ch.id) && Core.nowProgram(programsFor(ch))) live.push(ch);
+    }
     /*
      * Ohne EPG blieb dieses Regal leer, und die Startseite kam bei Xtream ganz
      * ohne Sender aus. Dann ersatzweise die ersten Sender zeigen – Favoriten
@@ -1949,7 +2013,15 @@
     });
     if (sList) el.content.appendChild(sList);
 
-    var forYou = recommendations(lib.movies, 'id', 20);
+    /*
+     * Im Lazy-Modus ist `lib.movies` konstant leer – beide Empfehlungsregale
+     * konnten bei Xtream-Quellen NIE erscheinen, obwohl die App sie bewirbt.
+     * Der Zwischenspeicher der geoeffneten Kategorien ist die einzige
+     * verfuegbare Grundlage.
+     */
+    var empfPool = state.lazyKatalog ? geladeneFilme() : lib.movies;
+    var empfPoolSerien = state.lazyKatalog ? geladeneSerien() : lib.series;
+    var forYou = recommendations(empfPool, 'id', 20);
     var sFor = shelf('Für dich', forYou, function (m) {
       return card(m.title, m.posterURL, function () { openMovie(m); });
     });
@@ -1963,7 +2035,7 @@
       if (sBec) el.content.appendChild(sBec);
     }
 
-    var forYouSeries = recommendations(lib.series, 'id', 20);
+    var forYouSeries = recommendations(empfPoolSerien, 'id', 20);
     var sForS = shelf('Serien für dich', forYouSeries, function (x) {
       return card(x.title, x.posterURL, function () { openSeries(x); });
     });
@@ -3269,7 +3341,7 @@
       // alten Anbieters weiter auf Kanäle des neuen, und eine gewählte
       // Kategorie existiert dort womöglich gar nicht mehr.
       state.source = null; state.view = null;
-      state.epg = {}; state.rawLibrary = null;
+      state.epg = Object.create(null); state.rawLibrary = null;
       state.library = { channels: [], movies: [], series: [] };
       state.group = { live: null, movies: null, series: null };
       render();
@@ -3711,8 +3783,17 @@
         series: lib.series.filter(function (x) { return !isBlocked(x); }),
       };
     }
+    var vorher = state.library && state.library.channels ? state.library.channels.length : 0;
     state.library = lib;
     bibliothekGeaendert();
+    /*
+     * Wird die Senderliste GROESSER (Sprache dazugeschaltet, Kategorie
+     * entsperrt), fehlt den neuen Sendern das EPG: `loadEpg` schneidet die
+     * XMLTV-Daten auf die damals vorhandenen Kennungen zu und lief seither
+     * nicht erneut. Die neuen Sender blieben ohne Jetzt/Danach – bis „Neu
+     * laden".
+     */
+    if (state.source && lib.channels.length > vorher && vorher > 0) loadEpg();
   }
 
   /** Alle Kategorien der ROHEN Bibliothek – auch die ausgeblendeten, sonst
@@ -3773,7 +3854,7 @@
       if (err) { render(); return toast('M3U konnte nicht geladen werden: ' + err.message, 8000); }
       state.source = { kind: 'm3u', m3u: url };
       save('source', state.source);
-      state.epg = {};
+      state.epg = Object.create(null);
       // Eine M3U-Datei enthält alles auf einmal – kein Nachladen nötig.
       state.lazyKatalog = false;
       state.filmIndex = null;
@@ -3936,8 +4017,33 @@
     else loadXtreamSource(state.source.host, state.source.user, state.source.pass);
   }
 
+  /*
+   * EPG-Auffrischung. Ohne sie zeigte die Startseite nach Stunden weiter die
+   * laengst beendete Sendung samt stehendem Fortschrittsbalken, und nach rund
+   * 72 Stunden Laufzeit war das geladene Zeitfenster abgelaufen: `nowProgram`
+   * gab ueberall null, der Guide meldete „Diese Quelle liefert keine
+   * EPG-Daten". Fuer den Nutzer sah das aus, als haette sein Anbieter kein EPG.
+   */
+  var epgTakt = null;
+  var epgGeholt = 0;
+
+  function epgAuffrischen() {
+    if (epgTakt) clearInterval(epgTakt);
+    epgTakt = setInterval(function () {
+      if (document.hidden) return;          // im Hintergrund nichts tun
+      // Jede Minute neu zeichnen, solange eine Ansicht mit EPG sichtbar ist.
+      if (!player.open && (state.tab === 'home' || state.tab === 'live' ||
+          (state.view && state.view.type === 'guide'))) {
+        render();
+      }
+      // Und alle vier Stunden die Daten selbst nachladen.
+      if (Date.now() - epgGeholt > 4 * 3600 * 1000) loadEpg();
+    }, 60000);
+  }
+
   function loadEpg() {
     if (!state.source) return;
+    epgGeholt = Date.now();
     var url;
     if (state.source.kind === 'xtream') {
       url = state.source.host + '/xmltv.php?username=' +
@@ -3956,10 +4062,17 @@
         for (var c = 0; c < state.library.channels.length; c++) {
           if (state.library.channels[c].epgID) ids.push(state.library.channels[c].epgID);
         }
-        state.epg = Core.parseXMLTV(text, ids.length ? ids : null);
+        /*
+         * Ohne eine einzige `tvg-id` kann `programsFor` spaeter fuer KEINEN
+         * Sender etwas finden – der gesamte Baum waere gebaut und behalten,
+         * ohne je benutzt zu werden. Bei 42.000 Sendern ist das genau dort
+         * teuer, wo der Speicher fehlt.
+         */
+        if (!ids.length) return;
+        state.epg = Core.parseXMLTV(text, ids);
         if (!state.view && (state.tab === 'live' || state.tab === 'home')) render();
       } catch (e) { /* stumm */ }
-    }, 60000);
+    }, CATALOG_TIMEOUT);   // XMLTV kann dreistellig megabytegross sein
   }
 
   // ---------------------------------------------------------- Player ----
@@ -3996,6 +4109,15 @@
     el.player.className = 'open';
     el.scrubFill.style.width = '0%';
     el.times.textContent = kind === 'live' ? 'Live' : '';
+    /*
+     * Live einmal DIREKT schreiben. Alle regulaeren Aufrufer von
+     * `saveProgress` stehen hinter `duration > 0`, und ein Live-Stream meldet
+     * `Infinity` (HLS) bzw. `NaN` (roher TS) – der eigens dafuer geschriebene
+     * Zweig war damit unerreichbar. Folge: „Verschiedene Sender" in der
+     * Statistik stand dauerhaft auf 0, Live tauchte nie unter „Zuletzt
+     * gesehen" auf, und die Empfehlungen bekamen kein Signal aus dem Fernsehen.
+     */
+    if (kind === 'live') saveProgress(0, 0);
     /*
      * Der Hinweis muss zum Inhalt passen: Bei Live wechseln die Pfeiltasten den
      * Sender, gespult wird nicht. Der feste Text versprach beides gleichzeitig.
@@ -4645,6 +4767,7 @@
 
     document.addEventListener('keydown', onKey);
     document.addEventListener('keyup', gedruecktAus);
+    epgAuffrischen();
 
     var savedSource = load('source', null);
     if (!savedSource) { render(); return; }
