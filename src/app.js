@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.17.0';
+  var APP_VERSION = '1.20.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -982,32 +982,6 @@
     return treffer === undefined ? null : treffer;
   }
 
-  /** Langsamer Vollscan – nur noch als Rueckfallebene, siehe findById. */
-  function findByIdScan(id) {
-    var lists = [state.library.channels, state.library.movies, state.library.series];
-    // Bei bedarfsweisem Laden liegen Filme und Serien nicht in der Bibliothek,
-    // sondern in den zuletzt geöffneten Kategorien.
-    for (var k in state.katalogCache) {
-      if (Object.prototype.hasOwnProperty.call(state.katalogCache, k)) {
-        lists.push(state.katalogCache[k]);
-      }
-    }
-    for (var l = 0; l < lists.length; l++) {
-      for (var i = 0; i < lists[l].length; i++) if (lists[l][i].id === id) return lists[l][i];
-    }
-    /*
-     * Folgen stehen in keiner dieser Listen, sondern nur in `serie.episodes` –
-     * „Weiterschauen" fand deshalb NIE eine angefangene Folge wieder.
-     */
-    for (var m = 0; m < lists.length; m++) {
-      for (var j = 0; j < lists[m].length; j++) {
-        var eps = lists[m][j].episodes;
-        if (!eps || !eps.length) continue;
-        for (var e = 0; e < eps.length; e++) if (eps[e].id === id) return eps[e];
-      }
-    }
-    return null;
-  }
 
   function streamUrlOf(item) {
     if (!item) return '';
@@ -1289,6 +1263,12 @@
        */
       root.style.setProperty('--glas-licht', 'rgba(255,255,255,0.42)');
       root.style.setProperty('--glas-schatten', 'rgba(0,0,0,0.45)');
+      /*
+       * Auf dunklem Grund ist die Kartenflaeche HELLER als der Grund – eine
+       * helle Oberkante liest sich dort als Lichtkante auf Glas und traegt.
+       */
+      root.style.setProperty('--kante-oben', 'rgba(255,255,255,0.42)');
+      root.style.setProperty('--kante-unten', 'rgba(0,0,0,0.45)');
       root.style.setProperty('--glas-sheen-a', 'rgba(255,255,255,0.10)');
       root.style.setProperty('--glas-sheen-b', 'rgba(255,255,255,0.03)');
       root.style.setProperty('--glas-tief', 'rgba(0,0,0,0.60)');
@@ -1326,6 +1306,15 @@
       // weisse Lichtkante hebt sich klar ab, ein echter Schatten traegt.
       root.style.setProperty('--glas-licht', 'rgba(255,255,255,0.95)');
       root.style.setProperty('--glas-schatten', 'rgba(0,0,0,0.14)');
+      /*
+       * Auf hellem Grund NICHT. Seit die Karte fast weiss ist, erreicht die
+       * helle Oberkante gegen sie 1,01:1 – sie ist schlicht unsichtbar und
+       * ueberschreibt dabei die Kontur, die 2,10:1 traegt. Die Kanten sind
+       * hier deshalb rundum dieselbe: Erhebung kommt auf hellem Grund aus
+       * Kontur und Kontaktschatten, nicht aus Helligkeit.
+       */
+      root.style.setProperty('--kante-oben', 'rgba(0,0,0,0.30)');
+      root.style.setProperty('--kante-unten', 'rgba(0,0,0,0.30)');
       root.style.setProperty('--glas-sheen-a', 'rgba(255,255,255,0.60)');
       root.style.setProperty('--glas-sheen-b', 'rgba(255,255,255,0.00)');
       root.style.setProperty('--glas-tief', 'rgba(0,0,0,0.16)');
@@ -1434,16 +1423,6 @@
     return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
   }
 
-  function darken(hex, factor) {
-    var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
-    if (!m) return hex;
-    function part(h) {
-      var v = Math.round(parseInt(h, 16) * factor);
-      var s = Math.max(0, Math.min(255, v)).toString(16);
-      return s.length < 2 ? '0' + s : s;
-    }
-    return '#' + part(m[1]) + part(m[2]) + part(m[3]);
-  }
 
   function hexToRgba(hex, alpha) {
     var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
@@ -1867,8 +1846,21 @@
     while (state.katalogReihe.length > KATALOG_CACHE_MAX) {
       var alt = state.katalogReihe.shift();
       delete state.katalogCache[alt];
-      delete sortCache[('movies:' + alt.slice(2))];   // Sortier-Kopien halten
-      delete sortCache[('series:' + alt.slice(2))];   // sonst die Eintraege fest
+      /*
+       * Ueber die Schluessel laufen statt sie zu raten. `sortItems` bildet den
+       * Schluessel als `cacheKey + '|' + sort + '|' + laenge` – geloescht wurde
+       * hier aber `'movies:123'`, ein Schluessel, den es nie gibt. Es wurde
+       * also NICHTS geloescht, und der Deckel KATALOG_CACHE_MAX war wirkungslos,
+       * sobald eine andere Sortierung als „Standard" eingestellt war: Der
+       * Sortier-Zwischenspeicher hielt eine volle Kopie jeder je geoeffneten
+       * Kategorie fest – genau den Speicher, den das kategorieweise Laden
+       * vermeiden soll.
+       */
+      var kat = alt.slice(2);
+      for (var sk in sortCache) {
+        if (sk.indexOf('movies:' + kat + '|') === 0 ||
+            sk.indexOf('series:' + kat + '|') === 0) delete sortCache[sk];
+      }
       bibliothekGeaendert();
     }
   }
@@ -2276,8 +2268,15 @@
     }
     var s2 = shelf(ohneEpg ? 'Sender' : 'Jetzt im TV', live, function (ch) {
       var now = Core.nowProgram(programsFor(ch));
+      /*
+       * Beide Marken, nicht nur LIVE: Ist `marken` gesetzt, ueberspringt
+       * `card()` den Aufruf `markenAusTitel` – auf der Startseite verlor damit
+       * ausgerechnet jeder LAUFENDE Sender seine 4K/HD-Angabe, waehrend
+       * `anzeigeName` sie zugleich aus der Beschriftung nahm.
+       */
+      var kMarken = (now ? ['LIVE'] : []).concat(markenAusTitel(ch.name));
       var c = card(ch.name, ch.logoURL, function () { playChannel(ch); }, true,
-        null, now ? ['LIVE'] : null, ch.group);
+        null, kMarken.length ? kMarken : null, ch.group);
       if (now) {
         c.appendChild(element('div', 'sub', now.title));
         var span = now.end - now.start;
@@ -2508,7 +2507,17 @@
     var programs = programsFor(ch);
     var now = Core.nowProgram(programs);
     var next = Core.nextProgram(programs);
-    info.appendChild(element('div', 'name', anzeigeName(ch.name, ch.group)));
+    /*
+     * Das Anbieter-Kuerzel faellt NUR weg, wenn der Nutzer diese Gruppe
+     * ausgewaehlt hat – dann ist es auf jeder Zeile dasselbe und damit
+     * Fuellmaterial. In der Gesamtliste, in der Suche und im Programmfuehrer
+     * ist es dagegen die Unterscheidung: „DE: QVC", „AT: QVC" und „IT: QVC"
+     * wurden sonst zu drei identischen Zeilen. Gegen die echten Daten
+     * gerechnet verdoppelte das die doppelten Namen in gemischten Listen von
+     * 3.681 auf 8.049.
+     */
+    var kuerzbar = state.group.live && state.group.live === ch.group ? ch.group : null;
+    info.appendChild(element('div', 'name', anzeigeName(ch.name, kuerzbar)));
     if (guide) {
       if (now) {
         info.appendChild(element('div', 'sub',
@@ -2556,7 +2565,10 @@
       else if (!laeuft && an) row.className = row.className.replace(/\s*\bon-air\b/g, '');
       var pille = row.querySelector('.badge-live');
       if (laeuft && !pille && !row._guide) {
-        row.appendChild(element('span', 'badge-live', 'LIVE'));
+        // VOR dem Archiv-Knopf: `.channel` ist Flexbox, die DOM-Reihenfolge ist
+        // die Bildreihenfolge. Mit `appendChild` sprang die Pille hinter den
+        // Knopf und blieb dort, bis die Ansicht neu gebaut wurde.
+        row.insertBefore(element('span', 'badge-live', 'LIVE'), row._archivKnopf || null);
       } else if (!laeuft && pille) {
         pille.parentNode.removeChild(pille);
       }
@@ -2594,9 +2606,22 @@
     row._ch = ch; row._guide = false;
 
     if (isFavorite(ch.id)) row.appendChild(element('span', 'badge-fav', '★'));
+    /*
+     * Die Qualitaetsangabe MUSS zurueck, wenn `anzeigeName` sie aus dem Text
+     * genommen hat: Gegen die echten Daten gerechnet stieg die Zahl doppelt
+     * benannter Zeilen innerhalb einer Gruppe von 442 auf 2.312 – „UK: BBC 1
+     * HEVC ᴴᴰ" und „… ⁴ᴷ" wurden beide zu „BBC 1 HEVC". Die Kacheln machen das
+     * seit jeher richtig (`card` liest `markenAusTitel`), die Zeile nicht.
+     */
+    var zMarken = markenAusTitel(ch.name);
+    for (var zm = 0; zm < zMarken.length && zm < 1; zm++) {
+      row.appendChild(element('span', 'marke sach', zMarken[zm]));
+    }
     if (now) row.appendChild(element('span', 'badge-live', 'LIVE'));
     var archiv = archivKnopf(ch);
     if (archiv) row.appendChild(archiv);
+    // Der Auffrischer muss die LIVE-Pille VOR dem Knopf einhaengen koennen.
+    row._archivKnopf = archiv || null;
 
     row.onclick = function () { playChannel(ch); };
     // Lange OK-Taste ist auf der Fernbedienung unzuverlässig – Favorit über
@@ -4565,6 +4590,9 @@
       var out = [];
       if (!roh || !roh.length) return out;
       for (var i = 0; i < roh.length; i++) {
+        // Wie in `parseCategories`: Ein `null` in der Liste warf hier auf dem
+        // Startpfad, ausserhalb jedes try/catch – der Spinner blieb stehen.
+        if (!roh[i] || typeof roh[i] !== 'object') continue;
         var id = roh[i].category_id, name = roh[i].category_name;
         if (id !== undefined && name) out.push({ id: String(id), name: String(name) });
       }
@@ -5486,6 +5514,14 @@
         state.loading = false;
         state.loadingStep = null;
         toast('Es ist ein Fehler aufgetreten: ' + message, 9000);
+        /*
+         * NEU ZEICHNEN, nicht nur den Zustand zuruecksetzen. Bricht ein Fehler
+         * die Ladekette ab, blieb der Vollbild-Spinner stehen – der Zustand
+         * sagte „fertig", der Bildschirm zeigte weiter „Sender werden geladen"
+         * und enthielt kein einziges bedienbares Element. Der Nutzer kam nur
+         * ueber die Zurueck-Taste wieder heraus.
+         */
+        render();
       } catch (e) { /* dann hilft nur noch der Neustart */ }
       return false;
     };

@@ -35,6 +35,8 @@
    */
   --flaeche-inhalt: rgba(255, 255, 255, 0.90);
   --kante-inhalt: rgba(0, 0, 0, 0.30);
+  --kante-oben: rgba(0, 0, 0, 0.30);
+  --kante-unten: rgba(0, 0, 0, 0.30);
   --hebung-1: 0 1px 0 rgba(20, 18, 45, 0.10), 0 2px 4px rgba(20, 18, 45, 0.10);
   --hebung-2: 0 1px 0 rgba(20, 18, 45, 0.12), 0 2px 6px rgba(20, 18, 45, 0.12),
               0 16px 32px -12px rgba(20, 18, 45, 0.26);
@@ -372,8 +374,8 @@ main::-webkit-scrollbar { width: 0; }
   /* Grundtransition steht jetzt auf `.focusable` – siehe dort. */
   /* `box-shadow: inset` wird UNTER dem Inhalt gemalt – das Poster deckt die
      obere Lichtkante vollstaendig ab. Der Rand dagegen liegt aussen. */
-  border-top-color: var(--glas-licht);
-  border-bottom-color: var(--glas-schatten);
+  border-top-color: rgba(255, 255, 255, 0.12); border-top-color: var(--kante-oben);
+  border-bottom-color: rgba(0, 0, 0, 0.14); border-bottom-color: var(--kante-unten);
   box-shadow: 0 14px 30px -10px var(--glas-tief);
   box-shadow: var(--hebung-2);
 }
@@ -1115,15 +1117,19 @@ body.eilig .card.focusable:focus .poster img {
  * einzige sofortige Rueckmeldung auf einen Tastendruck.
  */
 /*
- * Die doppelte Klasse hebt die Spezifitaet auf (0,4,0) – gerade so ueber
- * `.chip.focusable:focus`, `.channel.focusable:focus { transform: none }` und
- * `body.zeiger .focusable:focus`. Ohne das gewann ueberall der Fokus, und der
+ * Die DREIFACHE Klasse hebt die Spezifitaet auf (0,4,0). Zwei reichten nicht:
+ * `.focusable.focusable.gedrueckt` sind drei Klassen, also (0,3,0) – und
+ * `body.zeiger .focusable:focus` ist (0,3,1) und gewann weiter. Mit der Magic
+ * Remote setzt `cursorStateChange` die Klasse `zeiger` regelmaessig, der
+ * Druckzustand fiel dort auf Chips, Tabs und Knoepfen also nach wie vor aus.
+ * Gemeint sind ausserdem `.chip.focusable:focus`,
+ * `.channel.focusable:focus { transform: none }`. Ohne das gewann der
  * Druckzustand war ausser auf Karten UNSICHTBAR: auf Chips, Tabs, Knoepfen und
  * ausgerechnet auf der Senderzeile, der meistbenutzten Liste der App. Der Ring
  * wechselte, die Bewegung nicht – die „einzige sofortige Rueckmeldung" fiel
  * genau dort aus, wo sie am meisten gebraucht wird.
  */
-.focusable.focusable.gedrueckt, .focusable.focusable:active {
+.focusable.focusable.focusable.gedrueckt, .focusable.focusable.focusable:active {
   box-shadow: 0 0 0 3px var(--fokus-trenn),
               0 0 0 8px var(--fokus-ring),
               0 2px 6px var(--fokus-schatten);
@@ -1133,11 +1139,13 @@ body.eilig .card.focusable:focus .poster img {
 }
 /* Breite Elemente duerfen nicht schrumpfen (dieselbe Begruendung wie beim
    Fokusring: 5 % von 1792 px ragen ueber den Rand). Sie nicken stattdessen. */
-.channel.focusable.focusable.gedrueckt, .channel.focusable.focusable:active,
-input.focusable.focusable:active, .search.focusable.focusable:active {
+.channel.focusable.focusable.focusable.gedrueckt,
+.channel.focusable.focusable.focusable:active,
+input.focusable.focusable.focusable:active,
+.search.focusable.focusable.focusable:active {
   -webkit-transform: translate3d(0, 1px, 0); transform: translate3d(0, 1px, 0);
 }
-.card.focusable.focusable.gedrueckt, .card.focusable.focusable:active {
+.card.focusable.focusable.focusable.gedrueckt, .card.focusable.focusable.focusable:active {
   -webkit-transform: translate3d(0, -1px, 0) scale3d(0.985, 0.985, 1);
           transform: translate3d(0, -1px, 0) scale3d(0.985, 0.985, 1);
 }
@@ -1166,7 +1174,6 @@ input.focusable.focusable:active, .search.focusable.focusable:active {
  * verworfen. Wer Bewegung wirklich abschaltbar machen will, braucht zuerst
  * den Schalter in den Einstellungen.
  */
-}
 
 
 /* Einblenden schneller als Ausblenden – siehe #player-chrome. */

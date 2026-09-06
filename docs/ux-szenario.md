@@ -42,7 +42,7 @@ zusätzlich unterstützt (der Zeiger führt den Fokus).
 | Pfeile | Fokus bewegen (geometrisch, nicht in Dokumentreihenfolge) |
 | OK | Auswählen; im Player Pause/Weiter |
 | Zurück | Eine Ebene zurück; auf der Startseite **beendet sie die App** |
-| ◀ ▶ im Player | 10 s spulen, bei Live-Sendern Programmwechsel |
+| ◀ ▶ im Player | 10 s spulen (Archivaufnahmen 2 Min., weil webOS jeden Sprung auf eine Segmentgrenze setzt), bei Live-Sendern Programmwechsel |
 | Grün | Programmführer |
 | Gelb | Suche |
 | Blau | Favorit für das fokussierte Element umschalten |
@@ -68,6 +68,10 @@ zusätzlich unterstützt (der Zeiger führt den Fokus).
    Kategorien ausblenden, Kindersicherung mit PIN, Profile, Statistik.
 8. **Beenden** – Auf der Startseite die Zurück-Taste drücken. Die App schließt
    sich über `webOS.platformBack()`.
+   Auf dem **Einrichtungsbildschirm** – also dem Bild, das ein Prüfer ohne
+   Zugangsdaten sieht – sind es bewusst ZWEI Drücke mit einem Hinweis
+   dazwischen: Dort steht der Fokus in einem Textfeld, und ein einzelner
+   versehentlicher Druck hätte die Eingabe verworfen.
 
 ## Fehlerfälle, die geprüft werden können
 

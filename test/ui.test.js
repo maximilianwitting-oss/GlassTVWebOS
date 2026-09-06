@@ -358,6 +358,44 @@ test('jeder feste Fokuswunsch trifft einen wirklich vergebenen Merker', function
   }
 });
 
+test('style.css ist syntaktisch heil', function () {
+  /*
+   * Belegter Fehler: Beim Entfernen eines Regelblocks blieb dessen schliessende
+   * Klammer stehen. CSS bricht daran nicht ab – die verwaiste Klammer wandert
+   * in den Selektor der NAECHSTEN Regel und macht ihn ungueltig. Die Folgeregel
+   * (`#player-chrome:not(.hidden)`) fiel dadurch stillschweigend aus.
+   *
+   * Bis hierher hat kein Parser diese Datei je gesehen: Die uebrigen Tests
+   * lesen sie als Text. Diese Pruefung ist bewusst schlicht – sie faengt genau
+   * die Fehlerklasse, die entsteht, wenn jemand einen Block herausschneidet.
+   */
+  var css = fs.readFileSync(path.join(SRC, 'style.css'), 'utf8');
+  var ohne = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  var tiefe = 0;
+  for (var i = 0; i < ohne.length; i++) {
+    var c = ohne.charAt(i);
+    if (c === '{') tiefe++;
+    else if (c === '}') {
+      tiefe--;
+      if (tiefe < 0) {
+        var zeile = ohne.slice(0, i).split('\n').length;
+        assert.fail('schliessende Klammer ohne oeffnende in Zeile ' + zeile +
+          ' (Kommentare abgezogen) – die naechste Regel faellt dadurch aus');
+      }
+    }
+  }
+  assert.strictEqual(tiefe, 0, tiefe + ' Klammer(n) nicht geschlossen');
+
+  /*
+   * Und keine leeren Selektoren: Ein `{` direkt hinter `}` oder am Dateianfang
+   * bedeutet eine Regel ohne Ziel – dasselbe Fehlerbild aus der anderen
+   * Richtung.
+   */
+  var leer = /(^|\})\s*\{/.exec(ohne);
+  assert.ok(!leer, 'Regelblock ohne Selektor gefunden');
+});
+
 console.log('\nErgebnis: ' + (passed + failed) + ' Tests, ' + passed + ' bestanden, ' +
   failed + ' fehlgeschlagen');
 process.exit(failed === 0 ? 0 : 1);

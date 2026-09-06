@@ -364,6 +364,11 @@
     if (!json || !json.length) return map;
     for (var i = 0; i < json.length; i++) {
       var c = json[i];
+      // Dieselbe Haerte wie bei den Geschwisterfunktionen: Ein `null` in der
+      // Liste warf hier einen TypeError – und zwar auf dem STARTPFAD, ausserhalb
+      // jedes try/catch. Die Kette brach ab, `finish()` lief nie, und der
+      // Ladespinner blieb ohne ein einziges bedienbares Element stehen.
+      if (!c || typeof c !== 'object') continue;
       var id = str(c.category_id);
       var name = str(c.category_name);
       if (id && name) map[id] = name;
@@ -561,7 +566,14 @@
    */
   function istTrennzeile(name) {
     var t = String(name || '').replace(/^\s+|\s+$/g, '');
-    return /^#{3,}[\s\S]*#{3,}$/.test(t);
+    /*
+     * Zwei statt drei Rauten: Gegen die echten 42.907 Namen geprueft bleiben
+     * mit `#{3,}` sechsundzwanzig Trenner der Form `## NOW TV SPORT ##`
+     * anwaehlbar stehen. Mit `#{2,}` werden alle 723 erfasst – und weiterhin
+     * kein einziger echter Sender: Die einzigen Sender mit Raute tragen genau
+     * EINE (`#21 Indiana vs #22 Tennessee …`) und bleiben unberuehrt.
+     */
+    return /^#{2,}[\s\S]*#{2,}$/.test(t);
   }
 
   function parseLiveStreams(json, categories, host, user, pass, sourceID) {
@@ -1297,8 +1309,14 @@
    */
   var HOCHGESTELLT =
     /[²³¹ʰ-˿ᴬ-ᶿ⁰-₟ⱼⱽ]{2,}/g;
+  /*
+   * `VISION` und `ATMOS` stehen bewusst NUR hinter `DOLBY`. Als eigene
+   * Alternative machten sie aus dem echten Sendernamen „CA: VISION" ein „CA"
+   * und aus „GOLD: SYRI VISION" ein „GOLD: SYRI" – und der Notausgang griff
+   * nicht, weil das Ergebnis lang genug war.
+   */
   var QUALITAET_ENDE =
-    /[\s|:·\-]*\b(?:4K|UHD|FHD|HD|SD|2160P?|1080P?|720P?|DOLBY(?:\s+(?:AUDIO|VISION|ATMOS))?|ATMOS|VISION)\b[\s|:·\-]*$/i;
+    /[\s|:·\-]*\b(?:4K|UHD|FHD|HD|SD|2160P?|1080P?|720P?|DOLBY(?:\s+(?:AUDIO|VISION|ATMOS))?)\b[\s|:·\-]*$/i;
 
   /** Leerraum zusammenziehen und Trennzeichen an den Raendern abschneiden. */
   function randPutzen(t) {

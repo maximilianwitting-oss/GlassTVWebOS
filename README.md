@@ -8,7 +8,8 @@ JavaScript portiert — mit denselben Testfällen.
 ## Status
 
 Auf einem LG C9 (webOS 4.10) installiert und im Betrieb geprüft – mit einer
-Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
+Playlist aus 42.907 Sendern (davon 723 Gruppentrenner, die keine Sender sind),
+142.386 Filmen und 31.602 Serien.
 
 - **Tabs**: Start · Live TV · Filme · Serien · Favoriten; Suche, Guide und
   Einstellungen als Schaltflächen rechts oben.
@@ -21,7 +22,7 @@ Playlist aus 42.864 Sendern, 142.246 Filmen und 31.569 Serien.
   Kategorien bleiben im Speicher. Bei M3U-Quellen bleibt es beim bisherigen
   Verhalten – dort steht ohnehin alles in einer Datei.
 - **Kategorien**: Chips in Live TV, Filmen und Serien; Sortierung nach Name,
-  Jahr oder Bewertung.
+  Jahr, Bewertung oder „Neu hinzugefügt".
 - **Detailseiten**: Backdrop, Beschreibung, Regie/Besetzung, Favorit,
   „Weiter ab …" und ähnliche Titel. Serien mit Staffel-Chips und Folgenliste.
 - **EPG**: XMLTV vom Panel; laufende Sendung mit Fortschrittsbalken, „danach …"
@@ -76,10 +77,10 @@ technisch nicht möglich (siehe unten).
 - **Video ist nicht im Screenshot.** Die Wiedergabe läuft auf einer Hardware-
   Ebene, die der Browser nicht mitzeichnet: Ein Screenshot des laufenden Films
   ist schwarz, obwohl auf dem Schirm das Bild steht.
-- **Große Listen** werden bewusst in Blöcken gezeichnet (120 Senderzeilen,
+- **Große Listen** werden bewusst in Blöcken gezeichnet (40 Senderzeilen,
   63 Kacheln, Nachladen über eine Schaltfläche) – der TV-Browser bricht sonst
   ein, und jede sichtbare Kachel kostet ein dekodiertes Bild.
-- **Speicher.** Auf dem Gerät gemessen mit einer Playlist aus 42.915 Sendern,
+- **Speicher.** Auf dem Gerät gemessen mit einer Playlist aus 42.907 Sendern,
   142.246 Filmen und 31.569 Serien:
 
   | Posten | ursprünglich | 1.14 | jetzt |
@@ -98,12 +99,12 @@ technisch nicht möglich (siehe unten).
   kategorieweise statt am Stück: Die Antwort auf `get_vod_streams` ist bei
   dieser Playlist **58 MB**, die Kategorienliste dagegen **24 KB**. Der JS-Heap
   bleibt nach einem Rundgang durch alle Tabs stabil – kein Leck. Was vom
-  Prozesswert übrig bleibt, sind Browser-Cache und Renderer sowie die 42.915
+  Prozesswert übrig bleibt, sind Browser-Cache und Renderer sowie die 42.907
   Sender, die für Zapping und Programmführer geladen bleiben müssen.
 - **Suche über alle Filme ist zuschaltbar.** Ohne die Filme im Speicher sucht die
   App zunächst in den geöffneten Kategorien. Ein Knopf im Suchbildschirm baut
-  ein Titelverzeichnis über den ganzen Katalog auf: 142.246 Titel für rund
-  45 MB, gegenüber etwa 150 MB für den vollen Objektgraphen. Es entsteht
+  ein Titelverzeichnis über Filme UND Serien auf: 142.386 + 31.602 Titel für
+  rund 13 MB, gegenüber etwa 50 MB für den vollen Objektgraphen. Es entsteht
   **ohne `JSON.parse`** – ein Scanner liest Name, Stream-Nummer, Kategorie und
   Dateiendung direkt aus dem Antworttext. Gegen `JSON.parse` geprüft:
   **0 Abweichungen über alle 142.246 Einträge**. Zwei Fallen stecken darin:
@@ -139,8 +140,8 @@ statt `fetch`. Der Code läuft ohne Build-Schritt direkt so, wie er hier steht.
 
 ```sh
 export PATH="$HOME/.local/webos-toolchain/node/bin:$PATH"
-node test/core.test.js    # 36 Prüfungen: M3U, Xtream, Sprache, EPG, Titelindex
-node test/ui.test.js      # 10 Prüfungen: rendert, Tabs, Fokus, Suche, appinfo (jsdom)
+node test/core.test.js    # 63 Prüfungen: M3U, Xtream, Sprache, EPG, Titelindex, Archiv
+node test/ui.test.js      # 17 Prüfungen: rendert, Tabs, Fokus, Designsystem, CSS-Syntax
 ```
 
 ## Auf dem Fernseher prüfen

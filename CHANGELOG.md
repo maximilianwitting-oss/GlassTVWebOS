@@ -276,7 +276,7 @@ Ziel, wenn dieses längst sichtbar war. Beim Erstaufbau und beim bloßen
 Neuzeichnen wird jetzt nur noch gescrollt, wenn das Element wirklich außerhalb
 liegt.
 
-## 1.17.0
+## 1.16.2
 
 **Liquid Glass — ohne `backdrop-filter`.** Der klassische Glas-Effekt braucht
 `backdrop-filter`, das es erst ab Chrome 76 gibt; webOS 4 hat Chromium 53.
