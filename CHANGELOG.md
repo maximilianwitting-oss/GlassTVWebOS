@@ -1,5 +1,53 @@
 # Änderungen
 
+## 1.16.0
+
+Ergebnis eines zweiten Prüfdurchlaufs (Regression, Player, Datenhaltung,
+Parser). Ein Teil der Befunde sind Fehler, die 1.15.0 selbst eingebaut hatte.
+
+**Endlosschleife behoben.** Schlug das Nachladen einer verdrängten Kategorie
+fehl, rief der Fehlerzweig `render()`, das landete sofort wieder im Nachladen —
+gemessen 1074 Anfragen in 1,5 Sekunden, ohne Ausweg, weil auch „Abbrechen" und
+die Zurück-Taste über `render()` liefen. Vermutlich die wahre Ursache der
+Aussetzer, die zuvor dem Web-App-Manager zugeschrieben wurden.
+
+**Kindersicherung an drei Stellen repariert.** Die App wird beim Beenden nur in
+den Hintergrund gelegt (`handlesRelaunch`), `boot()` läuft dann nicht — die
+Sperre blieb offen und die Profilwahl wurde übersprungen. Bei vollem Speicher
+meldete das Setzen einer PIN Erfolg, obwohl nichts geschrieben wurde. Und die
+Prüfung aus 1.15.0 lief ins Leere, weil `katName['constructor']` in einem
+einfachen Objekt wahrheitsähnlich ist; alle Maps mit Schlüsseln aus der
+Playlist sind jetzt prototypfrei. Unbekannte Kategorie-Kennungen heißen nicht
+mehr „Allgemein" (ein nie gesperrter Sammelname), sondern tragen ihre Nummer.
+
+**Sprachfilter: 3.527 Titel kamen zurück.** Gruppe und Titel wurden als ein
+Text bewertet, und weil der längste Treffer gewinnt, überstimmte ein Wort aus
+dem Titel das Kürzel der Kategorie — „Captain America" galt als Englisch,
+„Five Nights at Freddy's" über das Wort „at" als Österreich. Gemessen an den
+142.246 echten Titeln fielen 2,5 % aus dem strikten DE-Filter; jetzt 0 %.
+
+**Leistung.** Favoriten wurden je Eintrag über einen Vollscan der Bibliothek
+aufgelöst — gemessen das 17- bis 49-Fache der Vorversion, bei jedem
+Neuzeichnen. Jetzt über ein Nachschlagewerk nach Kennung.
+
+**Wiedergabe.** Live-Sender landeten nie im Verlauf, weil alle Aufrufer hinter
+`duration > 0` stehen und Live `Infinity` meldet. Automatisch gestartete Folgen
+verloren die Dateiendung und ließen sich später nicht fortsetzen. Die
+Resume-Position wird auf die tatsächliche Länge gedeckelt. Nach dem Schließen
+zeigt die Detailseite den neuen Stand, und der Fokus bleibt beim gesehenen
+Titel. Erst ab 30 Sekunden wird gespeichert.
+
+**Datenhaltung.** Favoriten aus 1.14 (`{id: true}`) werden beim ersten
+Auftauchen aufgewertet statt stumm übersprungen. Favoriten und Merkliste sind
+auf 500 Einträge gedeckelt; „Meine Liste" lässt sich jetzt löschen. Ein voller
+Speicher kürzt erst den Verlauf, bevor er aufgibt.
+
+**Parser.** Der Adresspfad entscheidet über Live/Film/Serie statt des
+Gruppennamens — „US | TV SHOWS 24/7" wurde sonst zu lauter Einzelserien. Das
+Jahr wird aus dem Titel gelesen (76 % der Titel tragen es), womit auch die
+Sortierung nach Jahr wieder wirkt. Ein `null` in der Panel-Antwort kippt den
+Import nicht mehr.
+
 ## 1.15.0
 
 **Filme und Serien kommen kategorieweise statt am Stück.** Die Antwort auf

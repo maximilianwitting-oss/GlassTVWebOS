@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.15.0';
+  var APP_VERSION = '1.16.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -79,13 +79,46 @@
   function save(key, value) {
     try {
       localStorage.setItem('glasstv.' + key, JSON.stringify(value));
+      return true;
     } catch (e) {
+      /*
+       * Erst aufraeumen, dann aufgeben: Der Verlauf ist mit Abstand der
+       * groesste Posten und der am leichtesten verzichtbare. Ohne diesen
+       * Versuch war der Speicher endgueltig dicht, sobald er einmal voll war.
+       */
+      if (verlaufKuerzenBeiPlatznot()) {
+        try {
+          localStorage.setItem('glasstv.' + key, JSON.stringify(value));
+          return true;
+        } catch (e2) { /* weiter unten melden */ }
+      }
+      // Der Hinweis kommt nur einmal je Sitzung, das Scheitern meldet aber
+      // JEDER Aufruf ueber den Rueckgabewert – sonst behauptete die
+      // Oberflaeche Erfolg (etwa „PIN gesetzt"), obwohl nichts geschrieben war.
       if (!storageWarned && el.toast) {
         storageWarned = true;
         toast('Der Speicher des Fernsehers ist voll – Einstellungen und Verlauf ' +
           'lassen sich gerade nicht sichern.', 9000);
       }
+      return false;
     }
+  }
+
+  /** Im Platznotfall den Verlauf auf ein Viertel eindampfen. */
+  function verlaufKuerzenBeiPlatznot() {
+    var ids = [];
+    for (var k in state.progress) {
+      if (Object.prototype.hasOwnProperty.call(state.progress, k)) ids.push(k);
+    }
+    if (ids.length <= 50) return false;
+    ids.sort(function (a, b) {
+      return (state.progress[a].updatedAt || 0) - (state.progress[b].updatedAt || 0);
+    });
+    for (var i = 0; i < ids.length - 50; i++) delete state.progress[ids[i]];
+    try {
+      localStorage.setItem('glasstv.' + scoped('progress'), JSON.stringify(state.progress));
+      return true;
+    } catch (e) { return false; }
   }
 
   function load(key, fallback) {
@@ -104,14 +137,24 @@
     return state.activeProfile === 'default' ? key : key + '.' + state.activeProfile;
   }
 
-  function saveScoped(key, value) { save(scoped(key), value); }
+  function saveScoped(key, value) { return save(scoped(key), value); }
   function loadScoped(key, fallback) { return load(scoped(key), fallback); }
 
   /** Profildaten neu einlesen (nach Wechsel oder Anlegen). */
   function loadProfileData() {
-    state.favorites = loadScoped('favorites', {}) || {};
-    state.progress = loadScoped('progress', {}) || {};
-    state.watchlist = loadScoped('watchlist', {}) || {};
+    // `alsMap`: Ein beschaedigter Wert (String, Array) kam vorher durch. Ein
+    // String liess jeden Favoritenklick werfen, ein Array verwarf beim
+    // Speichern stumm alle Eintraege – der Verlauf wurde nie wieder gesichert.
+    state.favorites = alsMap(loadScoped('favorites', null));
+    state.progress = alsMap(loadScoped('progress', null));
+    state.watchlist = alsMap(loadScoped('watchlist', null));
+  }
+
+  /** Nur ein echtes Objekt gilt; alles andere wird verworfen. */
+  function alsMap(v) {
+    if (!v || typeof v !== 'object') return {};
+    if (Object.prototype.toString.call(v) === '[object Array]') return {};
+    return v;
   }
 
   // ------------------------------------------------------------ Netz ----
@@ -580,7 +623,7 @@
     if (cacheKey && groupCache[cacheKey] && groupCache[cacheKey].len === items.length) {
       return groupCache[cacheKey].list;
     }
-    var seen = {}, out = [];
+    var seen = Object.create(null), out = [];
     for (var i = 0; i < items.length; i++) {
       var g = items[i].group;
       if (g && !seen[g]) { seen[g] = true; out.push(g); }
@@ -607,9 +650,20 @@
    * Fall „Dieser Titel ist in der aktuellen Quelle nicht mehr enthalten",
    * obwohl er sehr wohl vorhanden war.
    */
-  function streamUrlAusId(id, ext) {
+  /** Kurzkennung der aktuellen Quelle – unterscheidet zwei Xtream-Panels. */
+  function quellenAbdruck() {
+    var src = state.source;
+    if (!src) return null;
+    if (src.kind === 'm3u') return 'm3u:' + (src.m3u || '');
+    return 'xtream:' + (src.host || '') + ':' + (src.user || '');
+  }
+
+  function streamUrlAusId(id, ext, quelle) {
     var src = state.source;
     if (!src || src.kind !== 'xtream' || !id) return '';
+    // Stammt der Eintrag nachweislich von einem anderen Panel, lieber nichts
+    // liefern als den falschen Film.
+    if (quelle && quelle !== quellenAbdruck()) return '';
     var teile = String(id).split('|');
     if (teile.length < 3) return '';
     var sid = teile[teile.length - 1];
@@ -620,8 +674,57 @@
     return Core.xtreamStreamUrl(art, src.host, src.user, src.pass, sid, ext || null);
   }
 
-  /** Eintrag anhand seiner Kennung in der Bibliothek finden. */
+  /*
+   * Nachschlagewerk nach Kennung. `merkListe` fragt je gemerktem Eintrag, und
+   * ein Vollscan ueber Bibliothek UND alle Folgen kostete gemessen das 17- bis
+   * 49-Fache (bei 200 Favoriten und einer M3U-Playlist rund 120 ms je Aufbau,
+   * auf dem Fernseher entsprechend mehr) – und das bei JEDEM Neuzeichnen.
+   * Der Index wird einmal je Bibliotheksstand gebaut; `idIndexStempel`
+   * verwirft ihn, sobald sich Bibliothek oder Zwischenspeicher aendern.
+   */
+  var idIndex = null;
+  var idIndexStempel = -1;
+  var bibliotheksStempel = 0;
+
+  /** Aufrufen, wenn sich Bibliothek oder Katalog-Zwischenspeicher aendern. */
+  function bibliothekGeaendert() { bibliotheksStempel++; }
+
+  function idIndexHolen() {
+    if (idIndex && idIndexStempel === bibliotheksStempel) return idIndex;
+    var idx = Object.create(null);
+    function add(list) {
+      if (!list) return;
+      for (var i = 0; i < list.length; i++) {
+        var it = list[i];
+        if (it && it.id !== undefined && idx[it.id] === undefined) idx[it.id] = it;
+        var eps = it && it.episodes;
+        if (eps) {
+          for (var e = 0; e < eps.length; e++) {
+            if (eps[e] && eps[e].id !== undefined && idx[eps[e].id] === undefined) {
+              idx[eps[e].id] = eps[e];
+            }
+          }
+        }
+      }
+    }
+    add(state.library.channels); add(state.library.movies); add(state.library.series);
+    for (var k in state.katalogCache) {
+      if (Object.prototype.hasOwnProperty.call(state.katalogCache, k)) add(state.katalogCache[k]);
+    }
+    idIndex = idx;
+    idIndexStempel = bibliotheksStempel;
+    return idx;
+  }
+
+  /** Eintrag anhand seiner Kennung finden. */
   function findById(id) {
+    if (id === undefined || id === null) return null;
+    var treffer = idIndexHolen()[id];
+    return treffer === undefined ? null : treffer;
+  }
+
+  /** Langsamer Vollscan – nur noch als Rueckfallebene, siehe findById. */
+  function findByIdScan(id) {
     var lists = [state.library.channels, state.library.movies, state.library.series];
     // Bei bedarfsweisem Laden liegen Filme und Serien nicht in der Bibliothek,
     // sondern in den zuletzt geöffneten Kategorien.
@@ -653,7 +756,9 @@
     var src = state.source;
     // Aus dem Merker rekonstruierte Eintraege haben keine Stream-Nummer, wohl
     // aber eine Kennung, die sie enthaelt.
-    if (item.sid === undefined && item.id) return streamUrlAusId(item.id, item.ext);
+    if (item.sid === undefined && item.id) {
+      return streamUrlAusId(item.id, item.ext, item.quelle);
+    }
     if (!src || src.kind !== 'xtream' || item.sid === undefined) return '';
     return Core.xtreamStreamUrl(item.art || 'movie', src.host, src.user, src.pass, item.sid, item.ext);
   }
@@ -681,7 +786,7 @@
 
   function toggleWatchlist(id, item) {
     if (state.watchlist[id]) delete state.watchlist[id];
-    else state.watchlist[id] = merkDaten(id, item);
+    else { state.watchlist[id] = merkDaten(id, item); merkerDeckeln(state.watchlist); }
     saveScoped('watchlist', state.watchlist);
   }
 
@@ -694,8 +799,27 @@
    */
   function toggleFavorite(id, item) {
     if (state.favorites[id]) delete state.favorites[id];
-    else state.favorites[id] = merkDaten(id, item);
+    else { state.favorites[id] = merkDaten(id, item); merkerDeckeln(state.favorites); }
     saveScoped('favorites', state.favorites);
+  }
+
+  /**
+   * Merker deckeln. Favoriten und Merkliste waren die einzigen Strukturen ohne
+   * Grenze; bei langen Titeln und Poster-Adressen kostet ein Eintrag rund 250
+   * Zeichen, und der Geraetespeicher fasst typisch nur wenige Megabyte.
+   */
+  var MERKER_MAX = 500;
+
+  function merkerDeckeln(map) {
+    var ids = [];
+    for (var k in map) {
+      if (Object.prototype.hasOwnProperty.call(map, k)) ids.push(k);
+    }
+    if (ids.length <= MERKER_MAX) return;
+    ids.sort(function (a, b) {
+      return (map[a] && map[a].gemerktAm || 0) - (map[b] && map[b].gemerktAm || 0);
+    });
+    for (var i = 0; i < ids.length - MERKER_MAX; i++) delete map[ids[i]];
   }
 
   /** Das Nötigste, um einen gemerkten Eintrag ohne Bibliothek zu zeigen. */
@@ -708,7 +832,14 @@
       group: item.group || null,
       art: item.art || null,
       ext: item.ext || null,
-      episodes: item.episodes ? 1 : 0   // nur als Merkmal „ist eine Serie"
+      // Ohne diese Nummern war eine gemerkte Serie eine Sackgasse („Keine
+      // Folgen"), und ein gemerkter Film blieb dauerhaft ohne Beschreibung.
+      sid: item.sid !== undefined ? item.sid : null,
+      serienID: item.xtreamSeriesID || null,
+      streamID: item.xtreamStreamID || null,
+      istSerie: item.episodes !== undefined ? 1 : 0,
+      gemerktAm: Date.now(),  // fuer die Verdraengung, siehe merkerDeckeln
+      quelle: quellenAbdruck()
     };
   }
 
@@ -716,24 +847,45 @@
    * Gemerkte Eintraege zu anzeigbaren Objekten machen: bevorzugt frisch aus
    * der Bibliothek (dort sind die Daten aktuell), sonst aus dem Gespeicherten.
    */
-  function merkListe(map) {
-    var out = [];
+  function merkListe(map, speichern) {
+    var out = [], aufgewertet = false;
     for (var k in map) {
       if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
-      var frisch = findById(k);
-      if (frisch) { out.push(frisch); continue; }
       var d = map[k];
-      // Alte Installationen haben hier noch `true` stehen – ohne Daten laesst
-      // sich nichts anzeigen, der Eintrag bleibt bis zum naechsten Besuch weg.
+      var frisch = findById(k);
+      if (frisch) {
+        /*
+         * Aufwerten: Installationen vor 1.15 haben hier `true` stehen. Ohne
+         * das Zurueckschreiben blieben solche Eintraege unsichtbar, sobald die
+         * Kategorie nicht geladen ist – und unsichtbar heisst auch: nicht
+         * abwaehlbar.
+         */
+        if (!d || d === true || !d.title) { map[k] = merkDaten(k, frisch); aufgewertet = true; }
+        out.push(frisch);
+        continue;
+      }
       if (!d || d === true || !d.title) continue;
       if (d.group && !kategorieErlaubt(d.group)) continue;
       out.push({
         id: d.id || k, title: d.title, posterURL: d.image || '',
         group: d.group || '', art: d.art || null, ext: d.ext || null,
-        episodes: d.episodes ? [] : undefined, _ausMerker: true
+        sid: d.sid !== undefined ? d.sid : null,
+        quelle: d.quelle || null,
+        xtreamSeriesID: d.serienID || null,
+        xtreamStreamID: d.streamID || null,
+        episodes: d.istSerie ? [] : undefined, _ausMerker: true
       });
     }
+    if (aufgewertet && speichern) saveScoped(speichern, map);
     return out;
+  }
+
+  /** Sender erkennen: am Eintrag selbst, nicht an der Form der Kennung. */
+  function istSenderEintrag(e) {
+    if (!e) return false;
+    if (e.art === 'live') return true;
+    if (e.streamURL !== undefined && e.name !== undefined) return true;   // M3U
+    return istSender(e.id);
   }
 
 
@@ -942,7 +1094,7 @@
    * bestimmt für immer, was man einmal vor einem halben Jahr gesehen hat.
    */
   function groupAffinity() {
-    var scores = {};
+    var scores = Object.create(null);
     var now = Date.now();
     var list = progressList();
     for (var i = 0; i < list.length; i++) {
@@ -1258,10 +1410,14 @@
   function katalogAblegen(art, katID, items) {
     var k = katalogSchluessel(art, katID);
     state.katalogCache[k] = items;
+    bibliothekGeaendert();
     state.katalogReihe.push(k);
     while (state.katalogReihe.length > KATALOG_CACHE_MAX) {
       var alt = state.katalogReihe.shift();
       delete state.katalogCache[alt];
+      delete sortCache[('movies:' + alt.slice(2))];   // Sortier-Kopien halten
+      delete sortCache[('series:' + alt.slice(2))];   // sonst die Eintraege fest
+      bibliothekGeaendert();
     }
   }
 
@@ -1277,10 +1433,16 @@
       katalogAnfrage = null;
     }
     state.katalogLaedt = null;
+    // Zurueck zur Kategorienliste: Bliebe die Wahl stehen, liefe der Aufbau
+    // sofort wieder in den Nachladepfad – der Abbruch waere wirkungslos.
+    state.katWahl.movies = null;
+    state.katWahl.series = null;
     render();
   }
 
   var katalogAnfrage = null;
+  // Kategorien, deren Abruf gescheitert ist – verhindert die Nachlade-Schleife.
+  var katalogFehler = Object.create(null);
   // Generationszaehler: Ein Abbruch erhoeht ihn, veraltete Antworten werden
   // dadurch verworfen – `abort()` allein ist auf webOS nicht verlaesslich.
   var katalogLauf = 0;
@@ -1303,6 +1465,7 @@
       katalogAnfrage = null;
       state.katalogLaedt = null;
       if (err || !json) {
+        katalogFehler[katalogSchluessel(art, katID)] = true;
         render();
         toast('Die Kategorie „' + katName + '“ kam nicht an' +
           (err ? ' (' + err.message + ')' : '') +
@@ -1317,12 +1480,14 @@
           ? Core.parseVodStreams(json, kat, src.host, src.user, src.pass, 'xtream')
           : Core.parseSeriesList(json, kat, 'xtream');
       } catch (e) {
+        katalogFehler[katalogSchluessel(art, katID)] = true;
         render();
         toast('Die Kategorie „' + katName + '“ ließ sich nicht lesen: ' + e.message, 8000);
         return;
       }
       // Sprachfilter und Sperren gelten auch hier.
       items = katalogFiltern(items);
+      delete katalogFehler[katalogSchluessel(art, katID)];   // Versuch geglueckt
       katalogAblegen(art, katID, items);
       fertig(items);
     }, 60000);
@@ -1334,7 +1499,7 @@
     if (state.settings.pin && !state.unlocked) {
       blockiert = blockiert.concat(state.settings.lockedGroups);
     }
-    var set = {};
+    var set = Object.create(null);
     for (var b = 0; b < blockiert.length; b++) set[blockiert[b]] = true;
     var out = [];
     for (var i = 0; i < items.length; i++) {
@@ -1449,7 +1614,14 @@
       return;
     }
     if (state.gate) { renderGate(); setTimeout(focusFirst, 0); return; }
-    if (!state.source || state.authFehler) { renderSetup(); return; }
+    if (!state.source || state.authFehler) {
+      renderSetup();
+      // Der Fokus-Block unten wird durch das `return` uebersprungen – ohne
+      // diesen Anlauf lag nach einem Anmeldefehler gar kein Fokus, obwohl
+      // „Erneut versuchen" mit `data-erstziel` dastand.
+      setTimeout(function () { if (!restoreFocus()) ensureFocus(); }, 0);
+      return;
+    }
 
     if (state.view) {
       if (state.view.type === 'movie') renderMovieDetail(state.view.item);
@@ -1501,13 +1673,6 @@
         b.onclick = function () {
           state.tab = t.id; state.view = null;
           render();
-          // Waehrend der Player offen war, wurde nichts neu aufgebaut – das zuletzt
-    // fokussierte Element existiert noch und wird behalten. `focusFirst` warf
-    // es weg: Nach Sender 300 stand man wieder bei Sender 1.
-    // Neu zeichnen: Sonst fehlt auf der Detailseite „Weiter ab …", und die
-    // Folgenliste zeigt den Fortschritt der gerade gesehenen Folge nicht.
-    if (state.view) render();
-    setTimeout(ensureFocus, 0);
         };
         el.tabs.appendChild(b);
       })(TABS[i]);
@@ -1536,7 +1701,8 @@
           // Reihenfolge: gespeicherte Adresse (M3U), sonst der Eintrag aus der
           // Bibliothek, sonst aus der Kennung gebaut – Letzteres greift, wenn
           // die Kategorie des Titels gerade nicht geladen ist.
-          var url = p.url || streamUrlOf(findById(p.id)) || streamUrlAusId(p.id, p.ext);
+          var url = p.url || streamUrlOf(findById(p.id)) ||
+            streamUrlAusId(p.id, p.ext, p.quelle);
           if (!url) return toast('Dieser Titel lässt sich gerade nicht öffnen.', 6000);
           playItem(p.title, url, 'Noch ' + rest + ' Min.', p.kind, p.id, p.position, null,
             { image: p.image, group: p.group });
@@ -1584,9 +1750,9 @@
 
     // Merkliste vor den allgemeinen Regalen – bewusst Gemerktes zuerst.
     var listItems = [];
-    var merk = merkListe(state.watchlist);
+    var merk = merkListe(state.watchlist, 'watchlist');
     for (var mi = 0; mi < merk.length; mi++) {
-      if (!istSender(merk[mi].id)) listItems.push(merk[mi]);
+      if (!istSenderEintrag(merk[mi])) listItems.push(merk[mi]);
     }
     var sList = shelf('Meine Liste', listItems, function (it) {
       return card(it.title, it.posterURL, function () {
@@ -1918,14 +2084,25 @@
         katalogLaden(art, kat.id, kat.name, function (items) {
           if (art === 'm') state.katWahl.movies = kat; else state.katWahl.series = kat;
           render();
-        }, kategorien.length);
-      });
+        });
+      }, kategorien.length);
     }
 
     var items = katalogAusCache(art, wahl.id);
     if (!items) {
-      // Der Zwischenspeicher haelt nur drei Kategorien. Wurde diese verdraengt,
-      // wird sie nachgeholt statt als „leer" gemeldet.
+      /*
+       * Der Zwischenspeicher haelt nur drei Kategorien. Wurde diese verdraengt,
+       * wird sie nachgeholt statt als „leer" gemeldet.
+       *
+       * Der Fehlermerker ist zwingend: Ohne ihn rief der Fehlerzweig von
+       * `katalogLaden` erneut `render()`, das landete sofort wieder hier und
+       * lud abermals – gemessen 1074 Anfragen in 1,5 Sekunden, ohne Ausweg,
+       * weil auch „Abbrechen" und die Zurueck-Taste ueber `render()` liefen.
+       */
+      if (katalogFehler[katalogSchluessel(art, wahl.id)]) {
+        if (art === 'm') state.katWahl.movies = null; else state.katWahl.series = null;
+        return renderLazyKatalog(art);   // zurueck zur Kategorienliste
+      }
       katalogLaden(art, wahl.id, wahl.name, function () { render(); });
       return renderEmpty('„' + wahl.name + '“ wird geladen …',
         'Einen Moment – die Kategorie kommt direkt vom Panel.');
@@ -2016,17 +2193,17 @@
      * Bibliothek: Bei kategorieweisem Laden ist die leer, und der Tab meldete
      * „Noch nichts gemerkt", obwohl alles gespeichert war.
      */
-    var favAlle = merkListe(state.favorites);
+    var favAlle = merkListe(state.favorites, 'favorites');
     var favMovies = [], favSeries = [];
     for (var f = 0; f < favAlle.length; f++) {
-      if (istSender(favAlle[f].id)) continue;   // Sender stehen in der Zeilenliste
+      if (istSenderEintrag(favAlle[f])) continue;   // Sender stehen in der Zeilenliste
       (favAlle[f].episodes !== undefined ? favSeries : favMovies).push(favAlle[f]);
     }
 
-    var listAlle = merkListe(state.watchlist);
+    var listAlle = merkListe(state.watchlist, 'watchlist');
     var listMoviesFav = [], listSeriesFav = [];
     for (var g = 0; g < listAlle.length; g++) {
-      if (istSender(listAlle[g].id)) continue;
+      if (istSenderEintrag(listAlle[g])) continue;
       (listAlle[g].episodes !== undefined ? listSeriesFav : listMoviesFav).push(listAlle[g]);
     }
     var anyList = listMoviesFav.length > 0 || listSeriesFav.length > 0;
@@ -2115,6 +2292,9 @@
   }
 
   function openMovie(movie) {
+    if (!movie.xtreamStreamID && state.source && state.source.kind === 'xtream') {
+      movie.xtreamStreamID = nummerAusId(movie.id);
+    }
     state.view = { type: 'movie', item: movie, zurueck: vorherigeAnsicht() };
     render();
     // Xtream liefert Beschreibung/Backdrop erst auf Nachfrage.
@@ -2247,7 +2427,19 @@
     if (s) el.content.appendChild(s);
   }
 
+  /** Xtream-Nummer aus der Kennung holen, falls der Eintrag sie nicht traegt. */
+  function nummerAusId(id) {
+    var teile = String(id || '').split('|');
+    var letzter = teile[teile.length - 1];
+    return /^\d+$/.test(letzter) ? letzter : null;
+  }
+
   function openSeries(series) {
+    // Aus dem Merker gebaute Eintraege haben die Nummer evtl. nicht dabei –
+    // ohne sie brach der Abruf ab und die Seite meldete dauerhaft „Keine Folgen".
+    if (!series.xtreamSeriesID && state.source && state.source.kind === 'xtream') {
+      series.xtreamSeriesID = nummerAusId(series.id);
+    }
     state.view = { type: 'series', item: series, season: null, zurueck: vorherigeAnsicht() };
     // `_folgenGeholt` statt nur der Laenge: Eine Serie, fuer die das Panel
     // nichts liefert, loeste sonst bei JEDEM Oeffnen einen neuen Abruf samt
@@ -2268,6 +2460,7 @@
         series._folgenGeholt = true;   // auch bei null Folgen: nicht erneut fragen
         series.episodes = Core.parseEpisodes(json, state.source.host,
           state.source.user, state.source.pass, series.id);
+        bibliothekGeaendert();   // die Folgen gehoeren jetzt in den Index
         if (json.info) {
           series.plot = series.plot || json.info.plot;
           series.backdropURL = (json.info.backdrop_path && json.info.backdrop_path.length)
@@ -2588,7 +2781,9 @@
   function indexSuche(q, limit) {
     var out = [], idx = state.filmIndex;
     if (!idx) return out;
-    var katName = {};
+    // Prototypfrei: Sonst ist katName['constructor'] wahr und eine so
+    // benannte Kategorie gaelte als bekannt – der Schutz unten fiele aus.
+    var katName = Object.create(null);
     for (var c = 0; c < state.vodKategorien.length; c++) {
       katName[state.vodKategorien[c].id] = state.vodKategorien[c].name;
     }
@@ -2882,10 +3077,18 @@
     actions.appendChild(button('Favoriten löschen (dieses Profil)', function () {
       state.favorites = {}; saveScoped('favorites', state.favorites);
       toast('Favoriten gelöscht.');
+      render();
     }, true));
     actions.appendChild(button('Verlauf löschen (dieses Profil)', function () {
       state.progress = {}; saveScoped('progress', state.progress);
       toast('Verlauf gelöscht.');
+      render();
+    }, true));
+    // Die Merkliste war die einzige Struktur ohne Deckelung UND ohne Notausgang.
+    actions.appendChild(button('Meine Liste löschen (dieses Profil)', function () {
+      state.watchlist = {}; saveScoped('watchlist', state.watchlist);
+      toast('Meine Liste geleert.');
+      render();
     }, true));
     panel.appendChild(actions);
     el.content.appendChild(panel);
@@ -3102,7 +3305,16 @@
         if (v.length < 4) return toast('Bitte 4 bis 8 Ziffern eingeben.');
         state.settings.pin = v;
         state.unlocked = true;
-        save('settings', state.settings);
+        /*
+         * Erfolg pruefen: Bei vollem Speicher wirkte die PIN gesetzt, stand
+         * aber nirgends – nach dem Neustart war die Kindersicherung weg. Eine
+         * Sperre, die es nur zu glauben gibt, ist schlimmer als keine.
+         */
+        if (!save('settings', state.settings)) {
+          state.settings.pin = null;
+          toast('Die PIN konnte nicht gespeichert werden – der Speicher des ' +
+            'Fernsehers ist voll. Die Kindersicherung ist NICHT aktiv.', 10000);
+        }
         render();
       }));
       pinPanel.appendChild(pinActions);
@@ -3135,7 +3347,10 @@
       lockActions.appendChild(button('PIN entfernen', function () {
         state.settings.pin = null;
         state.settings.lockedGroups = [];
-        save('settings', state.settings);
+        if (!save('settings', state.settings)) {
+          toast('Die Änderung konnte nicht gespeichert werden – nach einem ' +
+            'Neustart gilt wieder die alte Einstellung.', 9000);
+        }
         applyLanguageFilter(); render();
       }, true));
       el.content.appendChild(lockActions);
@@ -3274,6 +3489,7 @@
       };
     }
     state.library = lib;
+    bibliothekGeaendert();
   }
 
   /** Alle Kategorien der ROHEN Bibliothek – auch die ausgeblendeten, sonst
@@ -3283,7 +3499,7 @@
   function allGroups() {
     if (allGroupsCache) return allGroupsCache;
     if (!state.rawLibrary) return [];
-    var seen = {}, out = [];
+    var seen = Object.create(null), out = [];
     function add(list) {
       for (var i = 0; i < list.length; i++) {
         var g = list[i].group;
@@ -3579,7 +3795,16 @@
     if (resumeSeconds && resumeSeconds > 0) {
       // currentTime lässt sich erst setzen, wenn Metadaten da sind.
       player.seekHandler = function () {
-        try { el.video.currentTime = resumeSeconds; } catch (e) { /* egal */ }
+        /*
+         * Auf die tatsaechliche Laenge deckeln: Ist der Stream kuerzer als
+         * gespeichert (der Anbieter hat die Datei ersetzt), klemmt der Browser
+         * ans Ende und feuert sofort `ended` – bei Folgen sprang dadurch
+         * ungefragt die naechste an, bei Filmen schloss sich der Player.
+         */
+        var dauer = el.video.duration;
+        var ziel = (dauer && isFinite(dauer) && resumeSeconds > dauer - 5)
+          ? Math.max(0, dauer - 5) : resumeSeconds;
+        try { el.video.currentTime = ziel; } catch (e) { /* egal */ }
         el.video.removeEventListener('loadedmetadata', player.seekHandler);
         player.seekHandler = null;
       };
@@ -3605,7 +3830,11 @@
         // Nicht `Math.floor(pos) % 10`: Die Medienzeit springt (19,95 → 21,02),
         // dabei wurde das Fenster übersprungen – oder bei Pause im Sekundentakt
         // die ganze Verlaufsliste geschrieben.
-        if (player.lastSaved === undefined || Math.abs(pos - player.lastSaved) >= 10) {
+        // Erst ab 30 s speichern (dieselbe Schwelle wie `resumable`): Sonst stand
+        // jeder Fehlgriff nach einer Sekunde im Verlauf, und ein still
+        // gescheiterter Resume-Sprung loeschte die gemerkte Position.
+        if (pos > 30 &&
+            (player.lastSaved === undefined || Math.abs(pos - player.lastSaved) >= 10)) {
           player.lastSaved = pos;
           saveProgress(pos, dur);
         }
@@ -3651,6 +3880,11 @@
       // Die Dateiendung gehoert dazu: Ohne sie muesste ein rekonstruierter
       // Link „mp4" raten, und MKV-Titel liefen nicht wieder an.
       ext: (player.meta && player.meta.ext) || prev.ext || null,
+      // Fingerabdruck der Quelle: Alle Xtream-Panels teilen sich denselben
+      // Kennungsraum („xtream|m|4711"). Ohne diese Pruefung baute ein alter
+      // Eintrag nach einem Panelwechsel eine gueltige Adresse auf einen voellig
+      // ANDEREN Film – ohne Fehlermeldung.
+      quelle: quellenAbdruck(),
       position: position, duration: duration, updatedAt: Date.now(),
     };
     trimProgress();
@@ -3673,6 +3907,9 @@
       saveProgress(el.video.currentTime || 0, el.video.duration);
     }
     player.open = false;
+    var zuletztGespielt = player.id
+      ? (istSender(player.id) ? 'ch:' + player.id : 'card:' + player.id)
+      : null;
     if (player.tickTimer) { clearInterval(player.tickTimer); player.tickTimer = null; }
     if (player.hideTimer) { clearTimeout(player.hideTimer); player.hideTimer = null; }
     player.context = null;
@@ -3685,7 +3922,15 @@
     el.video.pause();
     el.video.removeAttribute('src');
     el.video.load();
-    setTimeout(focusFirst, 0);
+    /*
+     * Neu zeichnen, nachdem das Overlay zu ist: Sonst zeigt die Detailseite
+     * kein „Weiter ab …", die Folgenliste keinen Fortschritt und die Startseite
+     * eine veraltete Weiterschauen-Reihe – der Aufbau stammte noch von vor der
+     * Wiedergabe. Der Fokus geht auf den zuletzt gespielten Eintrag statt an
+     * den Listenanfang.
+     */
+    if (zuletztGespielt) focusWuenschen(zuletztGespielt);
+    render();
   }
 
   function pokeChrome() {
@@ -3726,7 +3971,9 @@
         var nx = eps[i + 1];
         playItem(s.title + ' · S' + two(nx.season) + 'E' + two(nx.episode),
           streamUrlOf(nx), nx.title, 'episode', nx.id, 0, { series: s, episode: nx },
-          { image: nx.imageURL || s.posterURL, group: s.group });
+          // `ext` mitgeben: Ohne sie riet der rekonstruierte Link spaeter „mp4",
+          // und automatisch gestartete MKV-Folgen liefen nicht wieder an.
+          { image: nx.imageURL || s.posterURL, group: s.group, ext: nx.ext });
         return true;
       }
     }
@@ -3900,6 +4147,17 @@
    * auf der Startseite gefangen und kam nur noch über die Home-Taste heraus.
    * Deshalb hier drei Wege, vom besten zum gröbsten.
    */
+  /**
+   * Kindersicherung und Profilwahl in den Ausgangszustand bringen – nach jedem
+   * Wiedereintritt in die App, weil `boot()` dann nicht laeuft.
+   */
+  function sperreZuruecksetzen() {
+    var warEntsperrt = state.unlocked;
+    state.unlocked = false;
+    state.gate = state.profiles.length > 1;
+    if (warEntsperrt) applyLanguageFilter();
+  }
+
   function exitApp() {
     // Der reguläre Weg – die Plattform blendet die App sauber aus.
     if (typeof webOS !== 'undefined' && webOS.platformBack) { webOS.platformBack(); return; }
@@ -4009,6 +4267,14 @@
     el.settings.onclick = function () { state.view = { type: 'settings' }; render(); };
 
     el.video.addEventListener('error', function () {
+      /*
+       * Nachzuegler ignorieren: `closePlayer()` reisst die Quelle ab
+       * (`removeAttribute('src')` + `load()`), und die webOS-Pipeline meldet
+       * das durchaus als Fehler. Ohne diese Zeile erschien die Meldung, obwohl
+       * nichts lief, und `closePlayer` lief ein zweites Mal – samt Fokussprung
+       * mitten in der Liste.
+       */
+      if (!player.open) return;
       // Ohne Schließen bliebe ein schwarzes Vollbild stehen, dessen Bedienhinweis
       // nach vier Sekunden ausgeblendet ist.
       toast('Dieser Stream lässt sich auf dem Fernseher nicht abspielen.', 8000);
@@ -4060,9 +4326,17 @@
      * inklusive offenem Player.
      */
     document.addEventListener('webOSRelaunch', function () {
+      /*
+       * `exitApp()` beendet die App nicht, sondern legt sie in den Hintergrund
+       * (`handlesRelaunch: true`). Beim naechsten Start feuert nur dieses
+       * Ereignis – `boot()` laeuft NICHT. Ohne das Zuruecksetzen unten blieb
+       * die Kindersicherung entsperrt und die Profilwahl uebersprungen: Wer
+       * mit der PIN entsperrt und die App verlaesst, uebergab sie offen.
+       */
       if (player.open) closePlayer();
       state.view = null;
       state.tab = 'home';
+      sperreZuruecksetzen();
       render();
     });
 

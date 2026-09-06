@@ -61,6 +61,16 @@
     return s.replace(/^[\s\-–—:|.·]+/, '').replace(/[\s\-–—:|.·]+$/, '');
   }
 
+  /**
+   * Erkennt eine Gruppe als Serien-Rubrik. Bewusst mit Wortgrenzen: Ein
+   * blosses `indexOf('show')` machte aus der Live-Gruppe „US | TV SHOWS 24/7"
+   * lauter einzelne Serien mit je einer Folge.
+   */
+  function istSerienGruppe(group) {
+    var g = ' ' + String(group || '').toLowerCase() + ' ';
+    return /[^a-z](serien?|series|staffel|season|tv[ -]?shows?)[^a-z]/.test(g);
+  }
+
   function classify(name, group, url) {
     var m = EPISODE_RE.exec(name);
     if (m) {
@@ -80,12 +90,22 @@
     }
     var ext = pathExtension(url);
     var lowerGroup = group.toLowerCase();
+    /*
+     * Der Pfad der Adresse ist das verlaesslichste Signal – verlaesslicher als
+     * der Gruppenname. Ein Live-Kanal in der Gruppe „US | TV SHOWS 24/7" wurde
+     * sonst zu lauter Einzelserien, und in einer Gruppe „Kinderserien" wurde
+     * jeder Film zu einer eigenen Serie mit genau einer Folge.
+     */
+    var lowerUrl = String(url || '').toLowerCase();
+    if (lowerUrl.indexOf('/live/') >= 0) return { kind: 'live' };
+    if (lowerUrl.indexOf('/series/') >= 0) {
+      return { kind: 'episode', seriesName: name, season: 1, episode: 1 };
+    }
+    if (lowerUrl.indexOf('/movie/') >= 0) return { kind: 'movie' };
     var isVOD = ['film', 'movie', 'vod', 'kino', 'cinema'].some(function (k) {
       return lowerGroup.indexOf(k) >= 0;
     });
-    var isSeries = ['serie', 'series', 'show', 'staffel', 'season'].some(function (k) {
-      return lowerGroup.indexOf(k) >= 0;
-    });
+    var isSeries = istSerienGruppe(lowerGroup);
     // `isSeries` muss den Zweig selbst öffnen können: Xtream-Serien-URLs haben
     // oft gar keine Endung (…/series/user/pass/12345) und die Gruppe heißt nur
     // „SERIEN | …" – solche Einträge landeten allesamt im Live-TV.
@@ -234,8 +254,29 @@
   }
 
   /** Xtream-Kategorien → { id: name }. */
+  /**
+   * Anzeigename einer Kategorie. Unbekannte Kennungen bekommen einen eigenen,
+   * sprechenden Namen statt „Allgemein": Dieser Sammelname steht nie in den
+   * Sperrlisten, weshalb Panels, die ihre 18+-Rubrik aus der Kategorienliste
+   * heraushalten (sie aber in den Streams mitliefern), die Kindersicherung
+   * damit aushebelten.
+   */
+  function kategorieName(categories, rohID) {
+    var id = str(rohID);
+    var name = id && Object.prototype.hasOwnProperty.call(categories, id)
+      ? categories[id] : null;
+    if (typeof name === 'string' && name) return name;
+    return id ? 'Unbekannte Kategorie ' + id : 'Ohne Kategorie';
+  }
+
   function parseCategories(json) {
-    var map = {};
+    /*
+     * Prototypfrei: Die Schluessel kommen aus der Playlist. Bei einem
+     * einfachen `{}` ist `map['constructor']` wahrheitsaehnlich – eine
+     * Kategorie dieses Namens gaelte damit als bekannt, und Pruefungen der
+     * Form `if (!gruppe)` fielen genau dort aus, wo sie schuetzen sollen.
+     */
+    var map = Object.create(null);
     if (!json || !json.length) return map;
     for (var i = 0; i < json.length; i++) {
       var c = json[i];
@@ -266,6 +307,7 @@
     if (!json || !json.length) return out;
     for (var i = 0; i < json.length; i++) {
       var s = json[i];
+      if (!s || typeof s !== 'object') continue;   // ein null kippte sonst den Import
       var id = num(s.stream_id);
       if (id === null) continue;
       out.push({
@@ -273,7 +315,7 @@
         id: sourceID + '|l|' + id,
         name: str(s.name) || ('Sender ' + id),
         logoURL: str(s.stream_icon),
-        group: categories[str(s.category_id)] || 'Allgemein',
+        group: kategorieName(categories, s.category_id),
         sid: id,
         art: 'live',
         epgID: str(s.epg_channel_id),
@@ -285,23 +327,33 @@
     return out;
   }
 
+  /** Jahreszahl aus einem Titel wie „Der Vorname (2018)" holen. */
+  function jahrAusTitel(titel) {
+    var m = /\((19|20)(\d{2})\)/.exec(String(titel || ''));
+    return m ? Number(m[1] + m[2]) : null;
+  }
+
   function parseVodStreams(json, categories, host, user, pass, sourceID) {
     var out = [];
     if (!json || !json.length) return out;
     for (var i = 0; i < json.length; i++) {
       var s = json[i];
+      if (!s || typeof s !== 'object') continue;   // ein null kippte sonst den Import
       var id = num(s.stream_id);
       if (id === null) continue;
       out.push({
         id: sourceID + '|m|' + id,
         title: str(s.name) || ('Film ' + id),
         posterURL: str(s.stream_icon),
-        group: categories[str(s.category_id)] || 'Allgemein',
+        group: kategorieName(categories, s.category_id),
         sid: id,
         art: 'movie',
         ext: str(s.container_extension) || null,
         rating: num(s.rating),
-        year: null,
+        // 108.246 von 142.246 echten Titeln tragen „(JJJJ)". Ohne das blieb das
+        // Jahr auf jeder Detailseite leer und die Sortierung „Jahr" verglich
+        // durchgehend -1 mit -1, war also wirkungslos.
+        year: jahrAusTitel(s.name),
         xtreamStreamID: id,
         sourceID: sourceID,
       });
@@ -428,13 +480,14 @@
     if (!json || !json.length) return out;
     for (var i = 0; i < json.length; i++) {
       var s = json[i];
+      if (!s || typeof s !== 'object') continue;   // ein null kippte sonst den Import
       var id = num(s.series_id);
       if (id === null) continue;
       out.push({
         id: sourceID + '|series|' + id,
         title: str(s.name) || ('Serie ' + id),
         posterURL: str(s.cover),
-        group: categories[str(s.category_id)] || 'Allgemein',
+        group: kategorieName(categories, s.category_id),
         plot: str(s.plot),
         rating: num(s.rating),
         xtreamSeriesID: id,
@@ -566,7 +619,15 @@
     }
   })();
 
-  function detectLanguage(text) {
+  /**
+   * Sprache aus einem Text bestimmen.
+   *
+   * `nurLange` blendet Aliase mit hoechstens drei Zeichen aus. Die sind fuer
+   * Kategorienamen gedacht („DE", „FR"), treffen in Filmtiteln aber gewoehnliche
+   * Woerter: Gemessen an 142.246 echten Titeln schlug „at" 1937-mal zu
+   * („Five Nights at Freddy's" → Oesterreich), „it" 4252-mal, „se" 4743-mal.
+   */
+  function detectLanguage(text, nurLange) {
     var lower = (text || '').toLowerCase();
     // Mehrteilige Aliase zuerst: „great britain" darf nicht an „britain" scheitern.
     for (var m = 0; m < MULTI_ALIASES.length; m++) {
@@ -584,6 +645,7 @@
     for (var i = 0; i < tokens.length; i++) {
       var t = tokens[i];
       if (!t) continue;
+      if (nurLange && t.length <= 3) continue;
       if (Object.prototype.hasOwnProperty.call(ALIAS_MAP, t) && t.length > bestLen) {
         // Längster Treffer gewinnt – „german" schlägt „ger".
         best = ALIAS_MAP[t]; bestLen = t.length;
@@ -604,6 +666,22 @@
     var wanted = {};
     for (var w = 0; w < preferred.length; w++) wanted[preferred[w]] = true;
 
+    /**
+     * Sprache eines Eintrags: erst die Kategorie, dann – nur mit langen
+     * Aliasen – der Titel.
+     *
+     * Vorher wurden beide als EIN Text bewertet, und weil der laengste Treffer
+     * gewinnt, schlug ein Wort aus dem Titel das zweibuchstabige Kuerzel der
+     * Kategorie. Gemessen: 3.527 von 142.246 Titeln (2,5 %) fielen in einer
+     * reinen DE-Gruppe aus dem strikten DE-Filter — „Captain America" als
+     * Englisch, „Made in Italy" als Italienisch.
+     */
+    function spracheVon(gruppe, titel) {
+      var ausGruppe = detectLanguage(gruppe);
+      if (ausGruppe !== null) return ausGruppe;
+      return detectLanguage(titel, true);
+    }
+
     function filterItems(items, textOf) {
       // Sprache je Element EINMAL bestimmen und am Element merken – vorher lief
       // die Erkennung zweimal über die gesamte Liste (einmal für die Prüfung
@@ -611,7 +689,7 @@
       var detectable = false;
       for (var i = 0; i < items.length; i++) {
         var it = items[i];
-        if (it._lang === undefined) it._lang = detectLanguage(textOf(it));
+        if (it._lang === undefined) it._lang = textOf(it);
         if (it._lang !== null) detectable = true;
       }
       if (!detectable) return items;
@@ -624,9 +702,9 @@
     }
 
     return {
-      channels: filterItems(playlist.channels, function (c) { return c.group + ' ' + c.name; }),
-      movies: filterItems(playlist.movies, function (m) { return m.group + ' ' + m.title; }),
-      series: filterItems(playlist.series, function (s) { return s.group + ' ' + s.title; }),
+      channels: filterItems(playlist.channels, function (c) { return spracheVon(c.group, c.name); }),
+      movies: filterItems(playlist.movies, function (m) { return spracheVon(m.group, m.title); }),
+      series: filterItems(playlist.series, function (s) { return spracheVon(s.group, s.title); }),
     };
   }
 
