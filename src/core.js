@@ -24,7 +24,44 @@
    * NICHT das letzte Komma nehmen – Titel enthalten selbst Kommas
    * („Der Vorname, 2018", „Berlin, Berlin") und würden sonst abgeschnitten.
    */
+  /**
+   * Trennstelle zwischen Attributteil und Anzeigename einer `#EXTINF`-Zeile.
+   *
+   * Normalfall: das erste Komma ausserhalb von Anfuehrungszeichen (deshalb
+   * wird „Der Vorname, 2018" nicht am Komma im Titel getrennt).
+   *
+   * Sonderfall: Enthaelt ein Attributwert selbst ein Anfuehrungszeichen
+   * (`tvg-name="Der 25" Film"`), ist deren Zahl ungerade und die Umschalt-
+   * logik laeuft aus dem Tritt – der Trenner landete dann mitten im Titel
+   * oder gar nicht. Dann wird stattdessen hinter dem letzten sauber
+   * erkannten `attr="…"` gesucht.
+   */
+  /**
+   * Trennstelle zwischen Attributteil und Anzeigename einer `#EXTINF`-Zeile.
+   *
+   * Massgeblich ist das Ende des LETZTEN vollstaendigen `attr="…"` – danach
+   * das naechste Komma. Das ist verlaesslicher als Anfuehrungszeichen zu
+   * zaehlen: Ein Wert, der selbst ein Anfuehrungszeichen enthaelt
+   * (`tvg-name="Der 25" Film"`), bringt jede Zaehl- oder Umschaltlogik aus
+   * dem Tritt – auch bei gerader Gesamtzahl, weil die Paarung falsch liegt.
+   * Der Trenner landete dann mitten im Titel, und aus „Der 25" Film, 2019"
+   * wurde „2019".
+   *
+   * Ein Komma INNERHALB eines Attributwerts (`tvg-id="a,b"`) wird dabei
+   * ebenfalls korrekt uebersprungen – das leistete die alte Fassung nur,
+   * solange die Anfuehrungszeichen sauber paarweise standen.
+   */
   function displayNameIndex(line) {
+    var re = /[A-Za-z0-9_-]+="[^"]*"/g, m, ende = -1;
+    while ((m = re.exec(line)) !== null) ende = m.index + m[0].length;
+
+    if (ende >= 0) {
+      var nach = line.indexOf(',', ende);
+      if (nach >= 0) return nach;
+    }
+
+    // Keine Attribute (oder keins vor dem Komma): erstes Komma ausserhalb
+    // von Anfuehrungszeichen.
     var inQuotes = false;
     for (var i = 0; i < line.length; i++) {
       var c = line.charAt(i);
@@ -150,6 +187,21 @@
         // Anführungszeichen im Namen als Attribute fehlgedeutet.
         currentAttributes = parseAttributes(comma >= 0 ? line.substring(0, comma) : line);
         currentName = comma >= 0 ? line.substring(comma + 1).replace(/^\s+|\s+$/g, '') : '';
+        continue;
+      }
+      /*
+       * `#EXTGRP:` traegt die Gruppe bei Playlisten, die kein `group-title`
+       * benutzen. Vorher fiel die Zeile unter „alles andere mit #" – solche
+       * Sender landeten samt und sonders in „Allgemein". Zwei Folgen: Die
+       * Kindersicherung arbeitet ueber Gruppennamen und griff nicht mehr, und
+       * die Gruppe ist die verlaesslichste Quelle der Spracherkennung.
+       */
+      if (line.indexOf('#EXTGRP') === 0) {
+        var dp = line.indexOf(':');
+        if (dp >= 0 && !currentAttributes['group-title']) {
+          var grp = line.substring(dp + 1).replace(/^\s+|\s+$/g, '');
+          if (grp) currentAttributes['group-title'] = grp;
+        }
         continue;
       }
       if (line.charAt(0) === '#') continue;

@@ -4135,6 +4135,7 @@
       : null;
     if (player.tickTimer) { clearInterval(player.tickTimer); player.tickTimer = null; }
     if (player.hideTimer) { clearTimeout(player.hideTimer); player.hideTimer = null; }
+    if (player.pufferTimer) { clearTimeout(player.pufferTimer); player.pufferTimer = null; }
     player.context = null;
     player.meta = null;
     if (player.seekHandler) {
@@ -4174,7 +4175,19 @@
   /** Sender wechseln (Zapping) – nur bei Live. */
   function zap(direction) {
     if (player.kind !== 'live' || !player.context || !player.context.channel) return;
+    /*
+     * In der gewaehlten Kategorie bleiben. Wer in „Sport" einen Sender
+     * startet, landete mit ▶ sonst in der Gesamtliste – bei 10.000 Sendern
+     * findet man von dort nicht zurueck.
+     */
     var list = state.library.channels;
+    if (state.group.live) {
+      var gefiltert = [];
+      for (var g = 0; g < list.length; g++) {
+        if (list[g].group === state.group.live) gefiltert.push(list[g]);
+      }
+      if (gefiltert.length > 1) list = gefiltert;
+    }
     var idx = -1;
     for (var i = 0; i < list.length; i++) {
       if (list[i].id === player.context.channel.id) { idx = i; break; }
@@ -4554,8 +4567,22 @@
     el.video.addEventListener('waiting', function () {
       el.playerSub.textContent = 'Wird geladen …';
       pokeChrome();
+      /*
+       * Zeitlimit fuers Puffern: Nimmt ein Server die Verbindung an, sendet
+       * aber nichts, kommt weder `error` noch `playing` – es blieb ein
+       * schwarzes Bild, dessen Bedienhinweis sich nach vier Sekunden
+       * ausblendet. Der Ausweg existierte, war nur nicht mehr sichtbar.
+       */
+      if (player.pufferTimer) clearTimeout(player.pufferTimer);
+      player.pufferTimer = setTimeout(function () {
+        if (!player.open) return;
+        toast('Der Stream antwortet nicht. Vielleicht ist der Sender gerade ' +
+          'nicht verfügbar.', 8000);
+        closePlayer();
+      }, 30000);
     });
     el.video.addEventListener('playing', function () {
+      if (player.pufferTimer) { clearTimeout(player.pufferTimer); player.pufferTimer = null; }
       if (el.playerSub.textContent === 'Wird geladen …') el.playerSub.textContent = player.subtitle || '';
     });
     el.video.addEventListener('ended', function () {
