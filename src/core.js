@@ -682,29 +682,66 @@
       return detectLanguage(titel, true);
     }
 
-    function filterItems(items, textOf) {
-      // Sprache je Element EINMAL bestimmen und am Element merken – vorher lief
-      // die Erkennung zweimal über die gesamte Liste (einmal für die Prüfung
-      // „ist überhaupt etwas erkennbar", einmal zum Filtern).
-      var detectable = false;
-      for (var i = 0; i < items.length; i++) {
-        var it = items[i];
+    /*
+     * Ist eine Kategorie ueberhaupt sprachlich sortiert?
+     *
+     * Verlaesslich ist nur das Kuerzel der Kategorie selbst. Sonst entscheidet
+     * die Mehrheit der Titel: Tragen die meisten ein Sprachmerkmal („DE - …",
+     * „FR - …"), ist die Kategorie sortiert. Ein einzelnes „The Italian Job"
+     * unter zwoelf neutralen Titeln macht sie es nicht.
+     *
+     * Vorher galt das Netz je LISTE und liess sich von einem einzigen Eintrag
+     * kippen — auf dem Geraet gemessen: eine Kategorie mit 13 Filmen zeigte 0.
+     */
+    var ANTEIL_SORTIERT = 0.5;
+
+    function filterItems(items, textOf, gruppeOf) {
+      var gruppen = Object.create(null);
+      var i, it, g;
+      // Sprache je Element EINMAL bestimmen und am Element merken.
+      for (i = 0; i < items.length; i++) {
+        it = items[i];
         if (it._lang === undefined) it._lang = textOf(it);
-        if (it._lang !== null) detectable = true;
+        g = gruppeOf(it) || '';
+        if (!gruppen[g]) {
+          gruppen[g] = {
+            ausGruppe: detectLanguage(g) !== null,
+            gesamt: 0,
+            mitSprache: 0
+          };
+        }
+        gruppen[g].gesamt++;
+        if (it._lang !== null) gruppen[g].mitSprache++;
       }
-      if (!detectable) return items;
+
+      // Je Kategorie entscheiden, ob gefiltert wird.
+      for (g in gruppen) {
+        if (!Object.prototype.hasOwnProperty.call(gruppen, g)) continue;
+        var d = gruppen[g];
+        d.filtern = d.ausGruppe ||
+          (d.gesamt > 0 && d.mitSprache / d.gesamt >= ANTEIL_SORTIERT);
+      }
+
       var out = [];
       for (var j = 0; j < items.length; j++) {
         var x = items[j];
+        var info = gruppen[gruppeOf(x) || ''];
+        if (!info || !info.filtern) { out.push(x); continue; }
         if ((x._lang !== null && wanted[x._lang]) || (!strict && x._lang === null)) out.push(x);
       }
       return out;
     }
 
     return {
-      channels: filterItems(playlist.channels, function (c) { return spracheVon(c.group, c.name); }),
-      movies: filterItems(playlist.movies, function (m) { return spracheVon(m.group, m.title); }),
-      series: filterItems(playlist.series, function (s) { return spracheVon(s.group, s.title); }),
+      channels: filterItems(playlist.channels,
+        function (c) { return spracheVon(c.group, c.name); },
+        function (c) { return c.group; }),
+      movies: filterItems(playlist.movies,
+        function (m) { return spracheVon(m.group, m.title); },
+        function (m) { return m.group; }),
+      series: filterItems(playlist.series,
+        function (s) { return spracheVon(s.group, s.title); },
+        function (s) { return s.group; }),
     };
   }
 

@@ -20,11 +20,17 @@ einfachen Objekt wahrheitsähnlich ist; alle Maps mit Schlüsseln aus der
 Playlist sind jetzt prototypfrei. Unbekannte Kategorie-Kennungen heißen nicht
 mehr „Allgemein" (ein nie gesperrter Sammelname), sondern tragen ihre Nummer.
 
-**Sprachfilter: 3.527 Titel kamen zurück.** Gruppe und Titel wurden als ein
-Text bewertet, und weil der längste Treffer gewinnt, überstimmte ein Wort aus
-dem Titel das Kürzel der Kategorie — „Captain America" galt als Englisch,
-„Five Nights at Freddy's" über das Wort „at" als Österreich. Gemessen an den
-142.246 echten Titeln fielen 2,5 % aus dem strikten DE-Filter; jetzt 0 %.
+**Sprachfilter: auf dem Gerät kam ein Vielfaches zurück.** Nach dem Aufspielen
+zeigte dieselbe Playlist **10.948 statt 3.159 Sender**, und eine Kategorie, die
+zuvor „0 Filme" meldete, enthielt **1.444**. Zwei Ursachen: Gruppe und Titel wurden als ein
+Erstens wurden Gruppe und Titel als ein Text bewertet, und weil der längste
+Treffer gewinnt, überstimmte ein Wort aus dem Titel das Kürzel der Kategorie —
+„Captain America" galt als Englisch, „Five Nights at Freddy's" über das Wort
+„at" als Österreich (2,5 % der 142.246 echten Titel). Zweitens griff das
+Sicherheitsnetz je LISTE: Ein einziger Titel mit erkannter Fremdsprache ließ
+eine ganze Kategorie verschwinden. Beides ist behoben — die Kategorie ist jetzt
+die Bezugsgröße, und gefiltert wird nur, wo sie erkennbar sprachlich sortiert
+ist (eigenes Kürzel oder mehrheitlich gekennzeichnete Titel).
 
 **Leistung.** Favoriten wurden je Eintrag über einen Vollscan der Bibliothek
 aufgelöst — gemessen das 17- bis 49-Fache der Vorversion, bei jedem
