@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.23.0';
+  var APP_VERSION = '1.23.1';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -1072,12 +1072,17 @@
     if (!item) return '';
     if (item.streamURL) return item.streamURL;
     var src = state.source;
-    // Aus dem Merker rekonstruierte Eintraege haben keine Stream-Nummer, wohl
-    // aber eine Kennung, die sie enthaelt.
-    if (item.sid === undefined && item.id) {
+    /*
+     * `null` genauso behandeln wie `undefined`: `merkDaten` speichert
+     * ausdruecklich `sid: null`, wenn ein Eintrag keine Nummer hat. Die
+     * Pruefung auf `undefined` allein liess das durch und baute daraus
+     * `…/movie/user/pass/null.mp4` – eine Adresse, die es nie gab.
+     */
+    if ((item.sid === undefined || item.sid === null) && item.id) {
       return streamUrlAusId(item.id, item.ext, item.quelle);
     }
-    if (!src || src.kind !== 'xtream' || item.sid === undefined) return '';
+    if (!src || src.kind !== 'xtream' ||
+        item.sid === undefined || item.sid === null) return '';
     return Core.xtreamStreamUrl(item.art || 'movie', src.host, src.user, src.pass, item.sid, item.ext);
   }
 
@@ -2005,6 +2010,19 @@
     var src = state.source;
     if (!src || src.kind !== 'xtream') { fertig([]); return; }
 
+    /*
+     * Eine noch laufende Anfrage abbrechen, bevor die naechste startet.
+     *
+     * Der Generationszaehler verwirft ihre ANTWORT zwar zuverlaessig, aber der
+     * Abruf lief bis zum Ende weiter: Wer schnell durch mehrere Kategorien
+     * blaettert, hatte drei, vier Abrufe gleichzeitig auf derselben Leitung –
+     * und derjenige, auf den er gerade wartet, bekam den kleinsten Anteil
+     * davon. Die geholten Daten werden ohnehin verworfen.
+     */
+    if (katalogAnfrage) {
+      try { katalogAnfrage.abort(); } catch (e) {}
+      katalogAnfrage = null;
+    }
     state.katalogLaedt = katName;
     var meinLauf = ++katalogLauf;
     render();
@@ -4323,6 +4341,20 @@
       e.abrufMinuten, e.panelStart, ch.sid);
   }
 
+  /**
+   * Programmfuehrer oeffnen und dabei die Deckelung zuruecksetzen.
+   *
+   * `state.guideLimit` wuchs mit jedem „Weitere 100 Sender" und wurde nur von
+   * einer neuen Suche im Guide zurueckgesetzt. Wer einmal auf 1.800 Sender
+   * nachgeladen hatte, zeichnete den Programmfuehrer fuer den Rest der Sitzung
+   * mit 1.800 Zeilen – samt `programsFor` je Zeile, bei jedem Oeffnen.
+   */
+  function guideOeffnen() {
+    state.view = { type: 'guide' };
+    state.guideLimit = 100;
+    render();
+  }
+
   function renderGuide() {
     el.content.appendChild(backButton());
     var withEpg = state.library.channels.filter(function (c) {
@@ -4973,6 +5005,7 @@
         ? state.authFehler + '. Prüfe die Internetverbindung des Fernsehers.'
         : state.authFehler + '. Prüfe Benutzer und Passwort – bei abgelaufenem ' +
           'Zugang nennt dir der Anbieter neue.'));
+      var wege = element('div', 'detail-actions');
       // Bei einem Netzaussetzer stimmen die gespeicherten Daten ja – dann soll
       // ein Knopf genuegen statt alles neu einzutippen.
       if (state.authIstNetz && saved) {
@@ -4981,8 +5014,26 @@
           reloadSource();
         });
         erneut.setAttribute('data-erstziel', '1');
-        panel.appendChild(erneut);
+        wege.appendChild(erneut);
       }
+      /*
+       * Zurueck in eine funktionierende Bibliothek.
+       *
+       * `render()` zeigt die Einrichtung, sobald `state.authFehler` gesetzt ist
+       * – und `loadXtreamSource` setzt ihn auch MITTEN im Betrieb, etwa beim
+       * „Neu laden" in den Einstellungen. Die bereits geladene Bibliothek blieb
+       * dabei vollstaendig im Speicher, war aber unerreichbar: Es gab keinen
+       * Weg zurueck ausser einer erneuten, erfolgreichen Anmeldung.
+       */
+      if (state.library.channels.length || state.library.movies.length) {
+        var weiter = button('Mit der geladenen Liste weitermachen', function () {
+          state.authFehler = null; state.authIstNetz = false;
+          render();
+        }, true);
+        if (!wege.childNodes.length) weiter.setAttribute('data-erstziel', '1');
+        wege.appendChild(weiter);
+      }
+      if (wege.childNodes.length) panel.appendChild(wege);
     }
     panel.appendChild(element('p', null,
       'GlassTV spielt deine eigene Playlist ab – Xtream Codes oder M3U. ' +
@@ -5159,7 +5210,22 @@
     httpGet(url, function (err, text) {
       state.loading = false;
       state.loadingStep = null;
-      if (err) { render(); return toast('M3U konnte nicht geladen werden: ' + err.message, 8000); }
+      if (err) {
+        render();
+        return toast('Die Playlist kam nicht an: ' + err.message + '. Prüfe die Adresse.', 8000);
+      }
+      /*
+       * Sieht das ueberhaupt nach einer Playlist aus? Ein HTTP 200 sagt nur,
+       * dass der Server geantwortet hat – eine Sperrseite des Anbieters ist
+       * ebenfalls ein 200. Ohne diese Pruefung wurde daraus eine leere
+       * Bibliothek, die zudem als Quelle GESPEICHERT wurde und beim naechsten
+       * Start wieder geladen wird.
+       */
+      if (!/^\s*(#EXTM3U|#EXTINF)/.test(text)) {
+        render();
+        return toast('Das sieht nicht nach einer Playlist aus. Prüfe die Adresse – ' +
+          'erwartet wird eine M3U-Datei.', 9000);
+      }
       state.source = { kind: 'm3u', m3u: url };
       save('source', state.source);
       // Geglueckt: Das Zwischenergebnis des Formulars wird nicht mehr gebraucht
@@ -5190,7 +5256,8 @@
         loadEpg();
       } catch (parseError) {
         render();
-        toast('Playlist konnte nicht gelesen werden: ' + parseError.message, 9000);
+        toast('Die Playlist ließ sich nicht lesen. Prüfe die Adresse – ' +
+          'erwartet wird eine M3U-Datei.', 9000);
       }
     }, CATALOG_TIMEOUT);
   }
@@ -5273,7 +5340,8 @@
         afterLoad(lib);
       } catch (parseError) {
         render();
-        return toast('Bibliothek konnte nicht aufgebaut werden: ' + parseError.message, 9000);
+        return toast('Die Bibliothek ließ sich nicht aufbauen. Geh in den ' +
+          'Einstellungen auf „Neu laden“.', 9000);
       }
       if (problems.length) {
         toast('Nicht alles kam an: ' + problems.join(', ') +
@@ -5897,7 +5965,7 @@
     }
     // Gelbe Taste: Suche. Grüne: Programmführer.
     if (code === 405) { state.view = { type: 'search', query: '' }; render(); e.preventDefault(); return; }
-    if (code === 404) { state.view = { type: 'guide' }; render(); e.preventDefault(); return; }
+    if (code === 404) { guideOeffnen(); e.preventDefault(); return; }
 
     if (code === 37) { navigationsTakt(); moveFocus(-1, 0); e.preventDefault(); }
     else if (code === 39) { navigationsTakt(); moveFocus(1, 0); e.preventDefault(); }
@@ -6118,7 +6186,7 @@
     applyTheme();
 
     el.search.onclick = function () { state.view = { type: 'search', query: '' }; render(); };
-    el.guide.onclick = function () { state.view = { type: 'guide' }; render(); };
+    el.guide.onclick = function () { guideOeffnen(); };
     el.settings.onclick = function () { state.view = { type: 'settings' }; render(); };
 
     el.video.addEventListener('error', function () {

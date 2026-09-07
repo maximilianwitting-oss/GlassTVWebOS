@@ -1,5 +1,38 @@
 # Änderungen
 
+## 1.23.1 — Die restlichen Befunde des Fehlerwege-Berichts
+
+**Ein abgeschnittener Download galt als vollständig.** HTTP 200 sagt nur, dass
+der Server geantwortet hat — eine Sperrseite des Anbieters ist ebenfalls ein
+200. Bei einer M3U-Quelle wurde daraus eine leere Bibliothek, die zudem als
+Quelle **gespeichert** wurde und beim nächsten Start wieder geladen wird. Jetzt
+wird geprüft, ob die Antwort überhaupt wie eine Playlist aussieht.
+
+**Ein Anmeldefehler warf aus einer funktionierenden Bibliothek.** `render()`
+zeigt die Einrichtung, sobald `state.authFehler` gesetzt ist — und
+`loadXtreamSource` setzt ihn auch mitten im Betrieb, etwa beim „Neu laden" in
+den Einstellungen. Die geladene Bibliothek blieb vollständig im Speicher, war
+aber unerreichbar: Es gab keinen Weg zurück außer einer erneuten, erfolgreichen
+Anmeldung. Jetzt steht dort „Mit der geladenen Liste weitermachen".
+
+**`streamUrlOf` prüfte nur auf `undefined`.** `merkDaten` speichert
+ausdrücklich `sid: null`, wenn ein Eintrag keine Nummer hat — `null` lief durch
+und ergab `…/movie/user/pass/null.mp4`, eine Adresse, die es nie gab.
+
+**Der Programmführer behielt seine Deckelung.** `state.guideLimit` wuchs mit
+jedem „Weitere 100 Sender" und wurde nur von einer neuen Suche zurückgesetzt.
+Wer einmal auf 1.800 Sender nachgeladen hatte, zeichnete den Guide für den Rest
+der Sitzung mit 1.800 Zeilen — samt `programsFor` je Zeile, bei jedem Öffnen.
+
+**Überholte Kategorieabrufe liefen weiter.** Der Generationszähler verwarf ihre
+Antwort zuverlässig, aber der Abruf lief bis zum Ende: Wer schnell durch mehrere
+Kategorien blättert, hatte drei, vier Abrufe gleichzeitig auf derselben Leitung
+— und derjenige, auf den er wartet, bekam den kleinsten Anteil.
+
+Dazu zwei rohe JS-Fehlermeldungen, die auf dem Fernsehbildschirm nichts zu
+suchen haben („Playlist konnte nicht gelesen werden: Unexpected token …").
+
+
 ## 1.23.0 — Auch der Katalog wird als Bytes gelesen
 
 Nach dem EPG (1.22.0) war der Aufbau des Titelverzeichnisses die verbliebene

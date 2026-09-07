@@ -140,7 +140,7 @@ statt `fetch`. Der Code läuft ohne Build-Schritt direkt so, wie er hier steht.
 
 ```sh
 export PATH="$HOME/.local/webos-toolchain/node/bin:$PATH"
-node test/core.test.js    # 63 Prüfungen: M3U, Xtream, Sprache, EPG, Titelindex, Archiv
+node test/core.test.js    # 70 Prüfungen: M3U, Xtream, Sprache, EPG, Titelindex, Archiv, Suchrang
 node test/ui.test.js      # 17 Prüfungen: rendert, Tabs, Fokus, Designsystem, CSS-Syntax
 ```
 
