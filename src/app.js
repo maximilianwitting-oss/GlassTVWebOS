@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.22.1';
+  var APP_VERSION = '1.23.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -4022,6 +4022,14 @@
     var url = Core.xtreamApi(src.host, src.user, src.pass, aktion);
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, true);
+    /*
+     * Als Bytes, nicht als Zeichenkette: Der blosse Zugriff auf
+     * `responseText` materialisiert die ganze Antwort. Auf dem Geraet gemessen
+     * kostete das bei `get_vod_streams` (58 MB) +59 MB und hob die Spitze beim
+     * Verzeichnisaufbau auf 332 MB. Der Scanner liest jetzt direkt die Bytes
+     * und erzeugt nur die kurzen Feldwerte.
+     */
+    xhr.responseType = 'arraybuffer';
     xhr.timeout = 120000;
     xhr.onload = function () {
       /*
@@ -4031,13 +4039,15 @@
        */
       if (xhr.status < 200 || xhr.status >= 300) { schief(); return; }
       var eintraege = null;
-      var laenge = (xhr.responseText || '').length;
+      var bytes = xhr.response ? new Uint8Array(xhr.response) : null;
+      var laenge = bytes ? bytes.length : 0;
       try {
-        eintraege = scan(xhr.responseText);
+        eintraege = scan(bytes);
       } catch (e) {
         eintraege = null;
       }
       xhr.onload = null;
+      bytes = null;
       /*
        * Plausibilitaet: Eine verpackte Antwort ({"movie_data":[…]}) oder eine
        * abgebrochene Verbindung ergibt einen oder wenige Eintraege bei einer

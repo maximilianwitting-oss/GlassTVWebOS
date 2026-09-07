@@ -671,125 +671,123 @@
     return scanIndex(text, serienEintragLesen);
   }
 
-  function scanIndex(text, lesen) {
+  /**
+   * Katalogantwort scannen – ueber BYTES, wie beim XMLTV.
+   *
+   * Derselbe Grund wie dort, nur kleiner: Der blosse Zugriff auf
+   * `xhr.responseText` materialisiert die ganze Antwort als Zeichenkette. Die
+   * Katalogantworten dieses Panels sind reines Latin-1, also einbytig — auf dem
+   * Geraet gemessen kostet `get_vod_streams` (58.006.645 Zeichen) dabei +59 MB
+   * und hob die Spitze beim Verzeichnisaufbau auf 332 MB. Ueber die Bytes
+   * gescannt entsteht diese Zeichenkette nie; erzeugt werden nur die kurzen
+   * Feldwerte, die auch behalten werden.
+   *
+   * Datensaetze werden an den echten Objektklammern getrennt, nicht an einem
+   * Feld: Der Name steht VOR `stream_id`, Kategorie und Endung dahinter — an
+   * `stream_id` geschnitten erbt jeder Eintrag Felder seines Nachbarn. Strings
+   * werden uebersprungen, damit eine Klammer in einem Filmtitel
+   * („Wer {das} liest") die Grenzen nicht verschiebt.
+   */
+  function scanIndex(bytes, lesen) {
     var out = [];
-    if (!text) return out;
+    var u = bytesAus(bytes);
+    if (!u || !u.length) return out;
 
-    /*
-     * Datensaetze werden an den echten Objektklammern getrennt, nicht an einem
-     * Feld: Der Name steht VOR `stream_id`, Kategorie und Endung dahinter — an
-     * `stream_id` geschnitten erbt jeder Eintrag Felder seines Nachbarn. Der
-     * Scanner ueberspringt Strings, damit eine Klammer in einem Filmtitel
-     * ("Wer {das} liest") die Grenzen nicht verschiebt.
-     */
-    var marke = /[{}"]/g;
-    var tiefe = 0, start = -1, m;
-    while ((m = marke.exec(text)) !== null) {
-      var z = m[0], i = m.index;
-      if (z === '"') {
-        var ende = stringEnde(text, i + 1);
-        if (ende < 0) break;
-        marke.lastIndex = ende + 1;
+    var n = u.length, tiefe = 0, start = -1, i = 0;
+    while (i < n) {
+      var b = u[i];
+      if (b === 34) {                       // '"'
+        i = byteStringEnde(u, i + 1);
+        if (i < 0) break;
+        i++;
         continue;
       }
-      if (z === '{') {
+      if (b === 123) {                      // '{'
         tiefe++;
         if (tiefe === 1) start = i;
-      } else {
+      } else if (b === 125) {               // '}'
         tiefe--;
         if (tiefe === 0 && start >= 0) {
-          lesen(out, text.slice(start, i + 1));
+          lesen(out, u, start, i + 1);
           start = -1;
         }
         if (tiefe < 0) tiefe = 0;
       }
+      i++;
     }
-    // Sonst haengt die ganze Antwort am letzten Regex-Treffer (siehe oben).
-    regexTrefferLoesen();
     return out;
   }
 
-  /*
-   * V8 haelt den Subject-String des LETZTEN erfolgreichen Regex-Treffers fest
-   * — fuer `RegExp.lastMatch` / `RegExp.$_`. `feldText` matcht auf
-   * `text.slice(start, i + 1)`, also auf einen SlicedString ueber die GANZE
-   * Antwort: Die bleibt danach im Speicher, obwohl niemand sie mehr haelt.
-   * Dieselbe Familie wie die SlicedString-Falle, gegen die `kopie()` schuetzt,
-   * nur eine Ebene tiefer — `kopie()` sichert die GESPEICHERTEN Felder, nicht
-   * die Trefferinfo der Regex-Maschine.
-   *
-   * Ein erfolgreicher Treffer auf einem Kurzstring loest sie. Gemessen an der
-   * echten Antwort dieses Panels (55,3 MB Zeichen, 142.246 Titel), Heap nach
-   * dem Scan mit dereferenziertem Antworttext:
-   *
-   *     ohne diese Zeile   104,3 MB
-   *     mit dieser Zeile    49,2 MB
-   *
-   * Wichtig beim Nachmessen: Der Regex-Zustand gehoert dem Realm. Ein Loeser,
-   * der ausserhalb dieses Moduls laeuft (etwa im Testrahmen), raeumt hier
-   * nichts auf — genau daran ist meine erste Messung gescheitert.
-   */
-  var LOESER = /x/;
-  function regexTrefferLoesen() { LOESER.exec('x'); }
-
   /** Position des schliessenden Anfuehrungszeichens ab `von` (Escapes beachtet). */
-  function stringEnde(text, von) {
-    var i = von;
-    while (i < text.length) {
-      var c = text.charCodeAt(i);
-      if (c === 92) { i += 2; continue; }   // Backslash: naechstes Zeichen ueberspringen
-      if (c === 34) return i;               // Anfuehrungszeichen
+  function byteStringEnde(u, von) {
+    var i = von, n = u.length;
+    while (i < n) {
+      var c = u[i];
+      if (c === 92) { i += 2; continue; }   // Backslash: naechstes Byte ueberspringen
+      if (c === 34) return i;
       i++;
     }
     return -1;
   }
 
+  /**
+   * Ein JSON-Feld aus einem Datensatz-Bytebereich holen.
+   *
+   * Gesucht wird die Bytefolge `"feld"`, danach der Doppelpunkt und der Wert.
+   * Entschluesselt wird nur der Wert – bei 142.246 Datensaetzen sind das kurze
+   * Zeichenketten statt einer 58-MB-Kette.
+   */
+  function byteFeld(u, von, bis, feld) {
+    var L = feld.length;
+    for (var p = von; p < bis - L - 3; p++) {
+      if (u[p] !== 34) continue;            // '"'
+      var ok = true;
+      for (var q = 0; q < L; q++) { if (u[p + 1 + q] !== feld.charCodeAt(q)) { ok = false; break; } }
+      if (!ok || u[p + 1 + L] !== 34) continue;
+      var r = p + 2 + L;
+      while (r < bis && u[r] === 32) r++;
+      if (u[r] !== 58) continue;            // ':'
+      r++;
+      while (r < bis && u[r] === 32) r++;
+      if (u[r] === 34) {                    // Zeichenkette
+        var e = byteStringEnde(u, r + 1);
+        if (e < 0 || e > bis) return '';
+        return jsonEntkleiden(bytesText(u, r + 1, e));
+      }
+      // Zahlenfelder wie category_id kommen je nach Panel ohne Anfuehrungszeichen.
+      var z = r;
+      while (z < bis && u[z] >= 48 && u[z] <= 57) z++;
+      return z > r ? bytesText(u, r, z) : '';
+    }
+    return '';
+  }
+
+
   /** Aus einem einzelnen Datensatz die Felder ziehen, die die Suche braucht. */
-  function eintragLesen(out, roh) {
-    var sid = feldText(roh, 'stream_id');
+  function eintragLesen(out, u, von, bis) {
+    var sid = byteFeld(u, von, bis, 'stream_id');
     if (!sid) return;
     out.push({
       s: Number(sid),
-      t: feldText(roh, 'name') || ('Film ' + sid),
-      c: feldText(roh, 'category_id'),
-      p: feldText(roh, 'stream_icon'),
-      e: feldText(roh, 'container_extension')
+      t: byteFeld(u, von, bis, 'name') || ('Film ' + sid),
+      c: byteFeld(u, von, bis, 'category_id'),
+      p: byteFeld(u, von, bis, 'stream_icon'),
+      e: byteFeld(u, von, bis, 'container_extension')
     });
   }
 
   /** Dasselbe fuer einen Serien-Datensatz: `series_id` statt `stream_id`. */
-  function serienEintragLesen(out, roh) {
-    var sid = feldText(roh, 'series_id');
+  function serienEintragLesen(out, u, von, bis) {
+    var sid = byteFeld(u, von, bis, 'series_id');
     if (!sid) return;
     out.push({
       s: Number(sid),
-      t: feldText(roh, 'name') || ('Serie ' + sid),
-      c: feldText(roh, 'category_id'),
-      p: feldText(roh, 'cover')
+      t: byteFeld(u, von, bis, 'name') || ('Serie ' + sid),
+      c: byteFeld(u, von, bis, 'category_id'),
+      p: byteFeld(u, von, bis, 'cover')
     });
   }
 
-  /**
-   * Ein JSON-Stringfeld aus einem Textausschnitt holen (mit Escapes).
-   *
-   * WICHTIG: Das Ergebnis wird bewusst kopiert. V8 legt fuer Teilzeichenketten
-   * ab 13 Zeichen keine Kopie an, sondern einen Zeiger auf den Elternstring —
-   * ein einziger behaltener Filmtitel haelt damit die GANZE Antwort im
-   * Speicher. Beim Titelverzeichnis waeren das 58 MB statt der 15 MB
-   * Nutzdaten; gemessen wurden 60,5 MB gegenueber 3,8 MB mit Kopie. Genau
-   * diesen Posten soll das Verzeichnis ja vermeiden.
-   */
-  function feldText(text, feld) {
-    var re = new RegExp('"' + feld + '":\\s*"((?:[^"\\\\]|\\\\.)*)"');
-    var m = re.exec(text);
-    if (!m) {
-      // Zahlenfelder wie category_id kommen je nach Panel ohne Anfuehrungszeichen.
-      var reZahl = new RegExp('"' + feld + '":\\s*(\\d+)');
-      var m2 = reZahl.exec(text);
-      return m2 ? kopie(m2[1]) : '';
-    }
-    return kopie(jsonEntkleiden(m[1]));
-  }
 
   /** Flache Kopie erzwingen, damit kein Zeiger auf den Elternstring bleibt. */
   function kopie(s) {
@@ -1186,14 +1184,6 @@
     return new Date(year, month, day, hour, minute, second);
   }
 
-  /** Attributwert aus einem Element-Kopf holen (einfache oder doppelte Quotes). */
-  function attrAus(kopf, name) {
-    var re = new RegExp(name + '\\s*=\\s*("([^"]*)"|\'([^\']*)\')');
-    var m = re.exec(kopf);
-    if (!m) return '';
-    // Fanggruppen sind in V8 ebenfalls Zeiger auf den Elternstring.
-    return kopie(m[2] !== undefined ? m[2] : (m[3] || ''));
-  }
 
   /**
    * Inhalt des ERSTEN <tag> in einem Ausschnitt. Bei mehrsprachigen

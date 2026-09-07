@@ -1,5 +1,33 @@
 # Änderungen
 
+## 1.23.0 — Auch der Katalog wird als Bytes gelesen
+
+Nach dem EPG (1.22.0) war der Aufbau des Titelverzeichnisses die verbliebene
+Speicherspitze: **332 MB**. Dieselbe Ursache, nur kleiner — der bloße Zugriff
+auf `xhr.responseText` materialisiert die ganze Antwort. `get_vod_streams`
+liefert 57.937.890 Zeichen; anders als beim XMLTV enthält sie **kein einziges
+Zeichen über U+00FF** (nachgeprüft), ist also einbytig und kostete „nur" +59 MB.
+
+`scanVodIndex` und `scanSeriesIndex` scannen jetzt Bytes und erzeugen nur die
+kurzen Feldwerte, die auch behalten werden.
+
+**Gegen die echte 58-MB-Antwort geprüft:** 142.246 Einträge in beiden Wegen,
+**null Abweichungen** — und der Byte-Scanner ist dabei *schneller*, 315 statt
+401 ms.
+
+Dadurch sind drei Helfer arbeitslos geworden und entfernt: `feldText`,
+`stringEnde` und `attrAus`. Mit ihnen entfällt auch `regexTrefferLoesen()` samt
+seinem Test — über die große Antwort läuft jetzt überhaupt kein Regex mehr, also
+kann V8 auch nichts mehr über den Subject-String des letzten Treffers
+festhalten. Der Test dazu ist durch einen ersetzt, der die neue Eigenschaft
+sichert: `scanIndex` darf keine Zeichenketten-Operationen auf der ganzen Antwort
+mehr enthalten.
+
+**Noch nicht am Gerät nachgemessen:** Der Fernseher ist während der Arbeit in
+Standby gegangen. Die erwartete Wirkung ist eine Spitze um 275 MB statt 332;
+`requiredMemory` bleibt vorerst bei 384, bis das gemessen ist.
+
+
 ## 1.22.1 — Pausenanzeige, Uhrzeit, und eine Prüfung an der richtigen Stelle
 
 **Pausiertes Fernsehen sagte nicht, dass es pausiert ist.** Nach dem Druck auf
