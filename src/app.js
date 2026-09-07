@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.23.1';
+  var APP_VERSION = '1.23.2';
 
   // ---------------------------------------------------------- Zustand ----
 

@@ -17,7 +17,7 @@ läuft. Technisch ist die App einreichbereit:
 | Auflösung 1920×1080 | ja |
 | Fehlerfall falsche Zugangsdaten | klare Meldung, führt zurück zur Einrichtung |
 | Debug-Reste im Code | keine `console.log`, kein `debugger` (maschinell geprüft) |
-| Tests | 70 Core + 17 UI, alle grün |
+| Tests | 71 Core + 17 UI, alle grün |
 
 ## Was noch fehlt – und nur du erledigen kannst
 

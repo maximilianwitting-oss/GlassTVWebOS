@@ -1343,9 +1343,27 @@
     var out = [], i, c;
     for (i = 0; i < x.length; i++) {
       c = x.charCodeAt(i);
+      /*
+       * Ersatzpaare zusammenfuehren. Ohne das wurden die beiden Haelften eines
+       * Emojis einzeln als Drei-Byte-Folge kodiert, und heraus kam Kauderwelsch
+       * – der Byteweg lieferte „Film 😂 Zwei", der Zeichenkettenweg
+       * „Film ������ Zwei". Aufgefallen erst im Randfalltest, weil dieser Weg
+       * nur noch die Tests bedient.
+       */
+      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < x.length) {
+        var tief = x.charCodeAt(i + 1);
+        if (tief >= 0xDC00 && tief <= 0xDFFF) {
+          c = 0x10000 + ((c - 0xD800) << 10) + (tief - 0xDC00);
+          i++;
+        }
+      }
       if (c < 0x80) out.push(c);
       else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
-      else out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      else {
+        out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63),
+                 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      }
     }
     return new Uint8Array(out);
   }

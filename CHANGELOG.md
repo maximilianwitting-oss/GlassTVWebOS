@@ -1,5 +1,27 @@
 # Änderungen
 
+## 1.23.2 — Ersatzpaare, gefunden im eigenen Randfalltest
+
+Nach dem Umbau der Scanner auf Bytes habe ich beide gegen Randfälle geprüft,
+statt es beim Vergleich über die echten Antworten zu belassen. Ein Fall ist
+durchgefallen:
+
+Ein Titel mit einem Emoji lieferte über den **Byte**weg korrekt „Film 😂 Zwei",
+über den Zeichenkettenweg aber „Film ������ Zwei". `bytesAus` kodierte
+Ersatzpaare als zwei getrennte Drei-Byte-Folgen, statt sie zu einem Zeichen
+zusammenzuführen.
+
+Der Weg bedient inzwischen nur noch die Tests — der Fehler war also nicht
+sichtbar, hätte aber jede spätere Prüfung mit solchen Zeichen still verfälscht.
+
+Beide Scanner haben jetzt bleibende Randfalltests: Umlaute, Zeichen außerhalb
+der Grundebene, Klammern im Titel („Wer {das} liest" darf die Datensatzgrenzen
+nicht verschieben), beliebige Feldreihenfolge, Zahlenfelder ohne
+Anführungszeichen, abgeschnittene und leere Antworten. Für XMLTV zusätzlich:
+einfache Anführungszeichen, Leerraum um das `=`, und ein Sender namens
+`start.de`, dessen Wert einen Attributnamen enthält.
+
+
 ## 1.23.1 — Die restlichen Befunde des Fehlerwege-Berichts
 
 **Ein abgeschnittener Download galt als vollständig.** HTTP 200 sagt nur, dass
