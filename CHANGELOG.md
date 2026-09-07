@@ -1,5 +1,68 @@
 # Änderungen
 
+## 1.22.0 — Ein Zeichen kostete 128 MB
+
+Die Startspitze lag bei 404 MB, während der Dauerzustand bei 158 liegt. Eine
+Messung am Gerät mit 150-ms-Abtastung hat sie einem einzigen Vorgang zugeordnet:
+
+```
+ 6,56 s   273 MB   XMLTV-Download fast durch
+ 6,72 s   402 MB   <-- +128 MB in EINEM Abtastschritt
+ 7,21 s   406 MB   Spitze
+```
+
+Der Sprung liegt zwischen `readyState 4` und dem ersten Befehl im Parser. Dort
+passiert genau eine Sache: der Zugriff auf `xhr.responseText`.
+
+**Die Ursache ist ein einziges Zeichen.** Die XMLTV-Datei dieses Panels enthält
+an Position 19.506 ein `◉` (U+25C9). Ein Zeichen über U+00FF zwingt V8, die
+*ganze* Zeichenkette zweibytig abzulegen: 68.678.437 × 2 = **137 MB**. Zum
+Vergleich, gleich gemessen: Die Katalogantwort mit 58.006.645 Zeichen kostet
+nur +59 MB — reines Latin-1, einbytig.
+
+`parseXMLTV` scannt jetzt **Bytes** statt einer Zeichenkette und entschlüsselt
+nur, was auch behalten wird — rund 9.800 von 211.000 Sendungen. Gemessen auf
+dem Gerät, zwei Läufe:
+
+| | vorher | nachher |
+|---|---|---|
+| Startphase mit EPG | 404 MB | **232 MB** |
+| Gesamtspitze | 404 MB | 332 MB (jetzt das Titelverzeichnis) |
+| Dauerzustand | 157 MB | 158 MB |
+
+`requiredMemory` geht von 512 auf **384** zurück.
+
+**Gegen die echte 72-MB-Datei geprüft:** Byte- und Zeichenkettenweg liefern bei
+eingefrorener Uhr exakt dasselbe — 2.316 Kanäle, 30.156 Sendungen, **null
+Abweichungen**. Der erste Vergleich zeigte 24 Unterschiede; die stammten
+sämtlich daraus, dass zwischen den beiden Läufen 1,6 Sekunden lagen und das
+−2/+6-Stunden-Fenster mitwanderte.
+
+### Vier Kandidaten, die nachweislich nichts bringen
+
+Diese Messungen sparen mehr Arbeit als sie gekostet haben:
+
+- **„EPG erst nach dem ersten Bild laden"** — 0 MB. Es ist bereits danach: Der
+  Aufbau steht bei 4,9 s, die EPG-Anfrage geht bei 6,1 s raus, die Spitze liegt
+  bei 9,7 s. Später anzufangen verschiebt den Berg, senkt ihn nicht.
+- **„XMLTV in Zeitscheiben scannen"** — 0 MB. Während der 4,4 s im Parser liegt
+  der Speicher flach bei 409–417 MB. Er steckt in der *Antwort*, nicht im
+  Ergebnis.
+- **„Die Senderliste vorher verwerfen"** — höchstens 10 MB (gemessen: nackte App
+  50,5 MB, mit 42.184 Sendern 60,5 MB).
+- **`overrideMimeType('iso-8859-1')`** — macht es um **28 MB schlimmer**. Chrome
+  löst das nach dem Encoding-Standard auf windows-1252 auf, und deren 0x80–0x9F
+  liegen über U+00FF: Die Kette ist wieder zweibytig und jetzt 72,2 statt 68,7
+  Mio. Zeichen lang.
+
+Ebenfalls widerlegt: Es überlappt sich **nichts**. Zum Zeitpunkt der
+EPG-Anfrage ist von der 15,9-MB-Senderliste nur noch das Ergebnis da; die
+gesamte Senderphase erreicht 216 MB und ist an der Spitze unbeteiligt. Und
+nichts hält den Antworttext länger fest als nötig — `xhr.responseText ===
+xhr.responseText` ergibt `true`, das Doppellesen in `holeVerzeichnis` ist
+harmlos, und die RegExp-Trefferinfo braucht hier kein `regexTrefferLoesen()`.
+
+
 ## 1.21.2 — Lecks, Sackgassen und Texte
 
 ### Ein Speicherleck, das nie aufgeräumt hat

@@ -11,13 +11,13 @@ läuft. Technisch ist die App einreichbereit:
 |---|---|
 | `appinfo.json` vollständig | ja – id, version, vendor, icons, bgColor, resolution |
 | Icons in LG-Größen | 80×80 und 130×130, geprüft |
-| `requiredMemory` | **512 MB**. Fein gemessen auf dem OLED77C9PLA (alle 3 s): Spitze **404 MB nach 6 Sekunden** in der Startphase, zweite Spitze 273 MB beim Aufbau des Titelverzeichnisses im Leerlauf, Dauerzustand **157 MB**. Die vorherigen 400 lagen unter der Spitze — `requiredMemory` ist die Zusage, an der webOS misst, und wer sie ueberschreitet ist der erste Kandidat fuer den Low-Memory-Killer. Die Startspitze selbst zu senken ist die naechste Aufgabe; sie stammt aus der Startphase, nicht aus dem Verzeichnis. |
+| `requiredMemory` | **384 MB**. Auf dem OLED77C9PLA gemessen, alle 2 s: Startphase mit EPG **232 MB** (vorher 404), Gesamtspitze **332 MB** beim Aufbau des Titelverzeichnisses, Dauerzustand **158 MB**. Die Startspitze fiel um 171 MB, seit XMLTV als Bytes statt als Zeichenkette gelesen wird — siehe CHANGELOG 1.22.0. |
 | Beenden über Zurück-Taste | ja, `webOS.platformBack()` – LG prüft das |
 | Vollständig mit Fernbedienung bedienbar | ja, inkl. Magic-Remote-Zeiger |
 | Auflösung 1920×1080 | ja |
 | Fehlerfall falsche Zugangsdaten | klare Meldung, führt zurück zur Einrichtung |
 | Debug-Reste im Code | keine `console.log`, kein `debugger` (maschinell geprüft) |
-| Tests | 69 Core + 17 UI, alle grün |
+| Tests | 70 Core + 17 UI, alle grün |
 
 ## Was noch fehlt – und nur du erledigen kannst
 

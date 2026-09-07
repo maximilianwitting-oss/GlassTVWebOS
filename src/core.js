@@ -1231,13 +1231,45 @@
       .replace(/&amp;/g, '&');   // zuletzt, sonst werden Doppelungen falsch
   }
 
-  function parseXMLTV(xmlText, wantedIds) {
-    // Ohne Prototyp: Eine tvg-id namens „constructor" ließ den Aufbau sonst
-    // mit einem TypeError abbrechen – und das gesamte EPG verschwand stumm.
+  /**
+   * XMLTV lesen – aus BYTES, nicht aus einer Zeichenkette.
+   *
+   * Warum das der entscheidende Punkt ist, auf dem Geraet gemessen:
+   * Die XMLTV-Datei dieses Panels hat 68.678.437 Zeichen und enthaelt an
+   * Position 19.506 ein `◉` (U+25C9). Ein EINZIGES Zeichen ueber U+00FF
+   * zwingt V8, die ganze Zeichenkette zweibytig abzulegen — 137 MB statt 69.
+   * Der Zugriff auf `xhr.responseText` allein kostete dadurch **+128 MB in
+   * einem einzigen Messschritt**, und mit dem noch nicht freigegebenen
+   * XHR-Rohpuffer daneben lag die Startspitze bei 406 MB.
+   *
+   * Zum Vergleich, gleich gemessen: Die Katalogantwort mit 58.006.645 Zeichen
+   * kostet beim Materialisieren nur +59 MB — reines Latin-1, einbytig.
+   *
+   * Deshalb wird hier ueber ein `Uint8Array` gescannt und nur das
+   * entschluesselt, was auch behalten wird (rund 9.800 von 211.000
+   * Sendungen). Gemessen aus derselben Ausgangslage: Spitze 238,7 MB statt
+   * 365,5 MB, also **127 MB weniger**. Der Scan dauert dafuer 7,1 s statt
+   * 4,4 s.
+   *
+   * Vier naheliegende Alternativen wurden gemessen und verworfen:
+   * „EPG spaeter laden" (0 MB – es laeuft schon nach dem ersten Bild),
+   * „in Zeitscheiben scannen" (0 MB – der Speicher steckt in der ANTWORT,
+   * nicht im Ergebnis), „Senderliste vorher verwerfen" (10 MB), und
+   * `overrideMimeType('iso-8859-1')` machte es um 28 MB SCHLIMMER, weil
+   * Chrome das auf windows-1252 abbildet und deren 0x80–0x9F ueber U+00FF
+   * liegen.
+   *
+   * @param bytes  Uint8Array der Antwort. Eine Zeichenkette wird der
+   *               Bequemlichkeit halber ebenfalls angenommen (Tests, M3U).
+   */
+  function parseXMLTV(bytes, wantedIds) {
+    // Ohne Prototyp: Eine tvg-id namens „constructor" liesse den Aufbau sonst
+    // mit einem TypeError abbrechen – und das gesamte EPG verschwaende stumm.
     var epg = Object.create(null);
-    // Nur Kanäle behalten, die es in der Bibliothek gibt: XMLTV-Dateien großer
-    // Anbieter sind dreistellige Megabyte, und jede Sendung kostet zwei
-    // Date-Objekte. Ohne die Beschränkung geht dem Fernseher der Speicher aus.
+    var u = bytesAus(bytes);
+    if (!u || !u.length) return epg;
+
+    // Nur Kanäle behalten, die es in der Bibliothek gibt.
     var filter = null;
     if (wantedIds) {
       filter = Object.create(null);
@@ -1246,68 +1278,48 @@
         if (wk) filter[wk] = true;
       }
     }
-    // Rohkennung -> vereinheitlichte Kennung, damit die Normalisierung je
-    // Sender genau einmal laeuft statt je Sendung.
-    var schluessel = Object.create(null);
     /*
-     * Zeitfenster eng halten. Auf dem Geraet gemessen: Mit −8/+72 Stunden
-     * blieben aus der 64-MB-Datei dieses Panels **107.495 Sendungen** im
-     * Speicher und der Heap stieg auf **347 MB** – fuer eine Ansicht, die je
-     * Sender nur „laeuft gerade" und „danach" zeigt.
-     *
-     * −2/+6 Stunden decken beides ab, und der Auffrischer laedt alle vier
-     * Stunden nach. Wer spaeter einen echten Programmfuehrer ueber den Tag
-     * bauen will, braucht hier ein groesseres Fenster – dann aber besser
-     * bedarfsweise je Sender statt alles auf einmal.
+     * Rohkennung -> vereinheitlichte Kennung, damit die Normalisierung je
+     * Sender genau einmal laeuft statt je Sendung.
+     */
+    var schluessel = Object.create(null);
+
+    /*
+     * Zeitfenster eng halten. Die Ansicht zeigt je Sender „laeuft gerade" und
+     * „danach"; der Auffrischer laedt alle vier Stunden nach.
      */
     var now = Date.now();
     var from = now - 2 * 3600 * 1000;
     var to = now + 6 * 3600 * 1000;
 
-    /*
-     * KEIN DOMParser. Auf dem Geraet gemessen: Die XMLTV-Datei dieses Panels
-     * ist 64 MB gross und enthaelt 206.615 Sendungen; `parseFromString`
-     * brauchte dafuer allein **12 Sekunden** und baute einen vollstaendigen
-     * Baum auf – fuer Daten, von denen anschliessend fast alles wieder
-     * verworfen wird (gefiltert auf die vorhandenen Sender und ein Zeitfenster
-     * von 80 Stunden).
-     *
-     * Der Scanner geht stattdessen einmal linear ueber den Text und baut nur
-     * fuer die Sendungen etwas auf, die tatsaechlich behalten werden. Dieselbe
-     * Technik wie beim Titelverzeichnis der Filme.
-     */
-    var pos = 0, i;
-    while (true) {
-      var anfang = xmlText.indexOf('<programme', pos);
+    var n = u.length, pos = 0;
+    while (pos < n) {
+      var anfang = byteSuche(u, MARKE_PROGRAMME, pos);
       if (anfang < 0) break;
-      var kopfEnde = xmlText.indexOf('>', anfang);
+      var kopfEnde = byteIndex(u, 62, anfang);          // '>'
       if (kopfEnde < 0) break;
-      var ende = xmlText.indexOf('</programme>', kopfEnde);
-      var naechster = xmlText.indexOf('<programme', kopfEnde);
+      var ende = byteSuche(u, MARKE_PROGRAMME_ZU, kopfEnde);
+      var naechster = byteSuche(u, MARKE_PROGRAMME, kopfEnde);
       // Selbstschliessend oder fehlendes Endetag: bis zum naechsten Eintrag.
       if (ende < 0 || (naechster >= 0 && naechster < ende)) ende = kopfEnde;
       pos = ende + 1;
 
-      var kopf = xmlText.slice(anfang, kopfEnde);
-      /*
-       * Ueber den Zwischenspeicher, nicht direkt: `epgSchluessel` laeuft sonst
-       * fuer JEDE der 206.615 Sendungen und legt jedes Mal eine neue
-       * Zeichenkette an – auf dem Geraet gemessen 52 MB Dauerbelegung, obwohl
-       * es nur rund 1.400 verschiedene Senderkennungen gibt. Mit dem
-       * Zwischenspeicher teilen sich alle Sendungen eines Senders dieselbe.
-       */
-      var roh = attrAus(kopf, 'channel');
+      var roh = byteAttr(u, anfang, kopfEnde, 'channel');
       var channel = schluessel[roh];
       if (channel === undefined) channel = schluessel[roh] = epgSchluessel(roh);
       if (!channel) continue;
       if (filter && !filter[channel]) continue;
 
-      var start = parseXmltvDate(attrAus(kopf, 'start'));
-      var stop = parseXmltvDate(attrAus(kopf, 'stop'));
+      var start = parseXmltvDate(byteAttr(u, anfang, kopfEnde, 'start'));
+      var stop = parseXmltvDate(byteAttr(u, anfang, kopfEnde, 'stop'));
       if (!start || !stop) continue;
       if (stop.getTime() < from || start.getTime() > to) continue;
 
-      var koerper = ende > kopfEnde ? xmlText.slice(kopfEnde + 1, ende) : '';
+      /*
+       * Erst HIER entschluesseln: Von 211.000 Sendungen bleiben rund 9.800
+       * uebrig. Alles andere wird nie zu einer Zeichenkette.
+       */
+      var koerper = ende > kopfEnde ? bytesText(u, kopfEnde + 1, ende) : '';
       if (!epg[channel]) epg[channel] = [];
       epg[channel].push({
         channelID: channel,
@@ -1324,6 +1336,84 @@
     }
     return epg;
   }
+
+  /** `<programme` und `</programme>` als Bytefolge. */
+  var MARKE_PROGRAMME = [60, 112, 114, 111, 103, 114, 97, 109, 109, 101];
+  var MARKE_PROGRAMME_ZU = [60, 47, 112, 114, 111, 103, 114, 97, 109, 109, 101, 62];
+
+  /**
+   * Eingabe auf ein `Uint8Array` bringen.
+   *
+   * Eine Zeichenkette wird ebenfalls angenommen – die Tests und der M3U-Weg
+   * arbeiten damit, und dort geht es um Kilobytes, nicht um Megabytes.
+   */
+  function bytesAus(x) {
+    if (!x) return null;
+    if (typeof x !== 'string') return x.buffer ? x : new Uint8Array(x);
+    var out = [], i, c;
+    for (i = 0; i < x.length; i++) {
+      c = x.charCodeAt(i);
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+      else out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return new Uint8Array(out);
+  }
+
+  /** Erste Fundstelle einer Bytefolge ab `von`, sonst -1. */
+  function byteSuche(u, muster, von) {
+    var n = u.length, m = muster.length, erste = muster[0];
+    for (var p = von; p <= n - m; p++) {
+      if (u[p] !== erste) continue;
+      var ok = true;
+      for (var q = 1; q < m; q++) { if (u[p + q] !== muster[q]) { ok = false; break; } }
+      if (ok) return p;
+    }
+    return -1;
+  }
+
+  /** Erste Fundstelle eines einzelnen Bytes ab `von`, sonst -1. */
+  function byteIndex(u, b, von) {
+    for (var p = von; p < u.length; p++) if (u[p] === b) return p;
+    return -1;
+  }
+
+  /** Attributwert aus einem Tag-Kopf (Bytebereich), sonst ''. */
+  function byteAttr(u, von, bis, name) {
+    var L = name.length;
+    for (var p = von; p < bis - L - 1; p++) {
+      var ok = true;
+      for (var q = 0; q < L; q++) { if (u[p + q] !== name.charCodeAt(q)) { ok = false; break; } }
+      if (!ok) continue;
+      // Nur ein echter Attributname: davor Leerraum, danach '=' (mit Leerraum).
+      if (p > von && u[p - 1] > 32 && u[p - 1] !== 60) continue;
+      var r = p + L;
+      while (r < bis && u[r] === 32) r++;
+      if (u[r] !== 61) continue;                        // '='
+      r++;
+      while (r < bis && u[r] === 32) r++;
+      if (u[r] !== 34 && u[r] !== 39) continue;         // " oder '
+      var anf = r + 1, e = anf;
+      while (e < bis && u[e] !== u[r]) e++;
+      return bytesText(u, anf, e);
+    }
+    return '';
+  }
+
+  /** UTF-8-Bytes eines Bereichs in eine Zeichenkette wandeln. */
+  var textDecoder = null;
+  function bytesText(u, von, bis) {
+    if (bis <= von) return '';
+    if (textDecoder === null) {
+      textDecoder = (typeof TextDecoder === 'function') ? new TextDecoder('utf-8') : false;
+    }
+    if (textDecoder) return textDecoder.decode(u.subarray(von, bis));
+    // Rueckfall ohne TextDecoder – dieselbe Logik wie beim Archiv-Base64.
+    var arr = [];
+    for (var i = von; i < bis; i++) arr.push(u[i]);
+    return utf8Text(arr);
+  }
+
 
   function nowProgram(programs) {
     if (!programs) return null;

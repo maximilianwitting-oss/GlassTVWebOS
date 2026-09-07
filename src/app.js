@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.21.2';
+  var APP_VERSION = '1.22.0';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -210,6 +210,47 @@
       xhr.send();
     } catch (e) { finish(e, null); }
     return xhr;   // damit Aufrufer eine laufende Anfrage abbrechen koennen
+  }
+
+  /**
+   * Wie `httpGet`, aber als Bytes statt als Zeichenkette.
+   *
+   * Fuer die XMLTV-Datei ist das der Unterschied zwischen 128 MB und nichts:
+   * Ein einziges Zeichen ueber U+00FF (in dieser Datei ein `◉` an Position
+   * 19.506) zwingt V8, die ganzen 68,7 Mio. Zeichen zweibytig abzulegen. Auf
+   * dem Geraet gemessen sprang der Speicher beim blossen Zugriff auf
+   * `responseText` um **+128 MB in einem Messschritt**; die Startspitze lag
+   * dadurch bei 406 MB.
+   */
+  function httpGetBytes(url, cb, timeoutMs) {
+    var xhr = new XMLHttpRequest();
+    var done = false;
+    function finish(err, bytes) { if (!done) { done = true; cb(err, bytes); } }
+    try {
+      xhr.open('GET', url, true);
+      xhr.responseType = 'arraybuffer';
+      xhr.timeout = timeoutMs || 25000;
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          finish(null, xhr.response ? new Uint8Array(xhr.response) : null);
+        } else {
+          var fehler = new Error(statusText(xhr.status));
+          fehler.status = xhr.status;
+          finish(fehler, null);
+        }
+      };
+      xhr.ontimeout = function () {
+        var t = new Error('Der Server hat zu lange nicht geantwortet');
+        t.status = 0; finish(t, null);
+      };
+      xhr.onerror = function () {
+        var n = new Error('Keine Verbindung zum Server');
+        n.status = 0; finish(n, null);
+      };
+      xhr.send();
+    } catch (e) { finish(e, null); }
+    return xhr;
   }
 
   function httpGetJson(url, cb, timeoutMs) {
@@ -5365,9 +5406,9 @@
       url = state.epgURL;
       if (!url) return;
     }
-    epgAnfrage = httpGet(url, function (err, text) {
+    epgAnfrage = httpGetBytes(url, function (err, text) {
       epgAnfrage = null;
-      if (err || !text) return;          // EPG ist Zugabe – ein Fehler darf nichts kippen
+      if (err || !text || !text.length) return;   // EPG ist Zugabe – ein Fehler darf nichts kippen
       try {
         // Nur Sendungen der tatsächlich vorhandenen Kanäle behalten: Die Datei
         // eines großen Anbieters ist dreistellig Megabyte groß.
