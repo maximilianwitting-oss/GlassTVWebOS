@@ -1,5 +1,96 @@
 # Änderungen
 
+## 1.21.2 — Lecks, Sackgassen und Texte
+
+### Ein Speicherleck, das nie aufgeräumt hat
+
+`lazyPruefen` verwarf entladene Bilder über `if (!img.parentNode)`. Diese
+Bedingung ist **nie** wahr geworden: `clear(el.content)` hängt nur die direkten
+Kinder von `#content` ab, das `<img>` bleibt Kind seines `.poster`-Div.
+Verschärfend liefert ein abgehängtes Element lauter Nullen als Rechteck — damit
+galt es als „im Sichtfeld" und behielt seine Bildquelle.
+
+Folge: Die Bilder **jeder je gezeichneten Ansicht** blieben dekodiert im
+Speicher, und die Prüfliste wuchs unbegrenzt, sodass jedes Scrollereignis alle
+je erzeugten Bilder vermaß. Jetzt entscheidet `document.contains(img)`.
+
+### Der Ladebildschirm war eine Falle
+
+Beim Öffnen einer Serie oder eines Archivs erschien ein Vollbild-Spinner **ohne
+ein einziges bedienbares Element**. Die Zurück-Taste änderte nur `state.view`,
+`state.loading` blieb wahr — der Spinner stand unverändert weiter da, der Druck
+sah aus, als wäre er verschluckt worden. Ein Prüfer saß so eine halbe Minute
+vor „Archiv wird geladen …", während die Anfrage längst gescheitert war; die
+Fehlermeldung erschien erst, als er aufgab.
+
+Jetzt trägt der Ladebildschirm einen „Abbrechen"-Knopf (mit Erstfokus), und die
+Zurück-Taste bricht den Ladevorgang ab, statt ins Leere zu greifen. Die
+Kategorienliste machte das seit jeher richtig; hier fehlte es.
+
+### Weitere belegte Befunde
+
+**Das Archiv gehörte zur alten Quelle.** Sein Schlüssel ist `xtream|l|123` —
+diesen Kennungsraum teilen sich alle Xtream-Panels. Nach einem Quellenwechsel
+zeigte das Archiv von Sender 123 ohne jeden Abruf die Sendungen des alten
+Anbieters, und die Timeshift-Adresse wurde gegen den neuen Host gebaut.
+
+**Mehrere XMLTV-Abrufe konnten gleichzeitig laufen.** `loadEpg` wird unter
+anderem jedes Mal gerufen, wenn die Senderliste wächst — beim Abwählen einer
+Sprache, bei „Alle wieder zeigen", beim Entsperren der Kindersicherung. Drei
+Klicks hintereinander ließen drei 64-MB-Downloads parallel laufen; als UTF-16
+sind das rund 380 MB Antworttext.
+
+**`holeVerzeichnis` prüfte den HTTP-Status nicht.** Ein 403 oder 500 mit
+HTML-Rumpf lief durch den Scanner; dass dabei meist nichts herauskam, war Glück.
+
+### Texte: die App erklärte dem Zuschauer ihre Speicherverwaltung
+
+- **„noch nicht geladen"** stand auf **jeder** der 299 Kategoriezeilen. Beide
+  Zustände führen zur exakt gleichen Geste; der Text änderte nichts am Handeln.
+  Ersatzlos gestrichen — ebenso der Absatz „Wähle eine Kategorie – sie wird dann
+  geladen. So bleibt der Speicher des Fernsehers frei für die Wiedergabe."
+- Die **Einstellungen begannen mit vier Zeilen** darüber, warum es keine
+  Downloads gibt, inklusive „LG lässt den Download-Dienst nur für signierte Apps
+  zu (geprüft – der Aufruf wird abgelehnt)" und einem Verweis auf iPhone und
+  Quest. Jetzt: „Downloads gibt es auf dem Fernseher nicht."
+- Die Startseite erklärte, dass Kategorien einzeln geladen werden, „damit der
+  Fernseher nicht den ganzen Katalog im Speicher halten muss".
+
+### Fehlermeldungen nennen jetzt die richtige Ursache
+
+**„(HTTP 0)"** war kein Textproblem an vier Stellen, sondern eines an einer:
+`httpGet` baute `new Error('HTTP ' + xhr.status)`, und vier Meldungen hängten
+das wörtlich an. Statuscodes werden jetzt übersetzt — „Server nicht erreichbar",
+„Zugang abgelehnt", „Der Anbieter meldet eine Störung".
+
+**Ein abgelaufener Zugang wurde als Netzaussetzer gemeldet.** Die Unterscheidung
+hing nur daran, *dass* ein Fehler kam, nicht woran er lag: Bei 401 oder 403
+zeigte die App „Prüfe die Internetverbindung des Fernsehers" — sie zeigte auf
+ein Netz, das in Ordnung ist, während man beim Anbieter hätte anrufen müssen.
+
+Dazu: „Für diesen Titel liegt keine Abspieladresse vor" (ein Datenfeld, keine
+Handlung) wird zu „Dieser Titel lässt sich gerade nicht starten. Öffne seine
+Kategorie noch einmal." Die rohe englische JS-Fehlermeldung aus `window.onerror`
+steht nicht mehr auf dem Bildschirm. Vier „Bitte … eingeben" duzen jetzt wie der
+Rest der App, „der PIN" heißt durchgehend „die PIN", und der Knopf „Archiv"
+heißt wie die Seite, auf die er führt: „Zurückschauen".
+
+### Eine Empfehlung, der ich nicht gefolgt bin
+
+Die Statistikkachel „Fortschritt insgesamt" sollte laut Vorschlag „Stunden
+gesehen" heißen. Das wäre falsch: Der Wert summiert **Fortsetzungsstände**, nicht
+Sehzeit — wer einen Film neu von vorn startet, lässt die Zahl schrumpfen. Genau
+deshalb war sie in 1.17.0 umbenannt worden. Der Einwand dahinter stimmt aber
+(die Kachel zeigte eine Zahl ohne Einheit), deshalb jetzt: „Stunden Fortschritt".
+
+### Kategorienamen bleiben unterscheidbar
+
+Meine Titelkürzung machte aus „NETFLIX MOVIES ⁴ᴷ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ" und „NETFLIX
+MOVIES DOLBY AUDIO" zwei identische Zeilen. Gekürzt wird jetzt nur, wo der
+Kurzname eindeutig bleibt: Von 299 Filmkategorien werden 15 gekürzt, 44 behalten
+ihren vollen Namen.
+
+
 ## 1.21.1 — Folgen finden
 
 Die globale Suche kann Folgen nicht erfassen, und das liegt nicht an ihr:

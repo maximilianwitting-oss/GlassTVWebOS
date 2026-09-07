@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.21.1';
+  var APP_VERSION = '1.21.2';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -46,6 +46,7 @@
     filmIndex: null,        // schlanker Titelindex, nur auf Wunsch
     serienIndex: null,      // dasselbe fuer Serien
     indexFehler: null,      // welcher Teil des Verzeichnisses fehlt
+    ladeAbbruch: null,      // laufende Anfrage hinter dem Vollbild-Spinner
     indexLaedt: false,
     vodKategorien: [],      // [{ id, name }]
     serienKategorien: [],
@@ -165,6 +166,21 @@
 
   // ------------------------------------------------------------ Netz ----
 
+  /**
+   * HTTP-Status in Klartext. `err.message` landet an vier Stellen woertlich in
+   * einer Meldung auf dem Fernsehbildschirm — dort stand bisher „(HTTP 0)".
+   *
+   * Der Status wird dabei nicht weggeworfen, sondern uebersetzt: „Server nicht
+   * erreichbar" sagt dasselbe wie 0, nur fuer jemanden, der auf dem Sofa sitzt.
+   */
+  function statusText(status) {
+    if (!status) return 'Server nicht erreichbar';
+    if (status === 401 || status === 403) return 'Zugang abgelehnt';
+    if (status === 404) return 'Beim Anbieter nicht gefunden';
+    if (status >= 500) return 'Der Anbieter meldet eine Störung';
+    return 'Der Anbieter hat nicht richtig geantwortet';
+  }
+
   function httpGet(url, cb, timeoutMs) {
     var xhr = new XMLHttpRequest();
     var done = false;
@@ -175,10 +191,22 @@
       xhr.onreadystatechange = function () {
         if (xhr.readyState !== 4) return;
         if (xhr.status >= 200 && xhr.status < 300) finish(null, xhr.responseText);
-        else finish(new Error('HTTP ' + xhr.status), null);
+        else {
+          var fehler = new Error(statusText(xhr.status));
+          // Den Status mitfuehren: Der Text ist fuer den Bildschirm, die Zahl
+          // fuer die Fallunterscheidung (Netzaussetzer gegen abgelehnten Zugang).
+          fehler.status = xhr.status;
+          finish(fehler, null);
+        }
       };
-      xhr.ontimeout = function () { finish(new Error('Zeitüberschreitung'), null); };
-      xhr.onerror = function () { finish(new Error('Netzwerkfehler'), null); };
+      xhr.ontimeout = function () {
+        var t = new Error('Der Server hat zu lange nicht geantwortet');
+        t.status = 0; finish(t, null);
+      };
+      xhr.onerror = function () {
+        var n = new Error('Keine Verbindung zum Server');
+        n.status = 0; finish(n, null);
+      };
       xhr.send();
     } catch (e) { finish(e, null); }
     return xhr;   // damit Aufrufer eine laufende Anfrage abbrechen koennen
@@ -187,7 +215,8 @@
   function httpGetJson(url, cb, timeoutMs) {
     return httpGet(url, function (err, text) {
       if (err) return cb(err, null);
-      try { cb(null, JSON.parse(text)); } catch (e) { cb(new Error('Ungültige Antwort'), null); }
+      try { cb(null, JSON.parse(text)); }
+      catch (e) { cb(new Error('Unlesbare Antwort vom Anbieter'), null); }
     }, timeoutMs);
   }
 
@@ -545,7 +574,21 @@
      */
     for (i = 0; i < lazyBilder.length; i++) {
       img = lazyBilder[i];
-      if (!img.parentNode) continue;            // Element ist weg
+      /*
+       * `document.contains`, NICHT `img.parentNode`.
+       *
+       * `clear(el.content)` haengt nur die direkten Kinder von `#content` ab.
+       * Das `<img>` bleibt Kind seines `.poster`-Div, also ist `parentNode`
+       * NIE null – die Aufraeumbedingung hat nie gegriffen. Verschaerfend:
+       * Ein abgehaengtes Element liefert lauter Nullen als Rechteck, damit war
+       * die Naehe-Pruefung unten erfuellt und `src` blieb gesetzt statt
+       * entladen zu werden.
+       *
+       * Folge: Die Bilder JEDER je gezeichneten Ansicht blieben dekodiert im
+       * Speicher, und `lazyPruefen` vermass bei jedem Scrollereignis alle je
+       * erzeugten Bilder – die Liste wuchs unbegrenzt weiter.
+       */
+      if (!document.contains(img)) continue;
       noch.push(img);
       r = img.getBoundingClientRect();
       nah.push(r.bottom > -hoehe && r.top < hoehe * 2 &&
@@ -1746,10 +1789,17 @@
       t.appendChild(element('div', 'stat-label', label));
       return t;
     }
+    /*
+     * NICHT „Stunden gesehen": `vodSeconds` summiert die Fortsetzungsstaende,
+     * nicht die Sehzeit. Wer einen Film neu von vorn startet, laesst die Zahl
+     * SCHRUMPFEN – als „gesehen" waere sie schlicht falsch. „Fortschritt"
+     * beschreibt, was wirklich gezaehlt wird; die Einheit gehoert trotzdem
+     * an die Kachel, sonst steht dort eine nackte Zahl.
+     */
     var hours = Math.floor(st.vodSeconds / 3600);
     tiles.appendChild(hours >= 1
-      ? tile(String(hours), 'Fortschritt insgesamt')
-      : tile(String(Math.floor(st.vodSeconds / 60)), 'Minuten gesehen'));
+      ? tile(String(hours), 'Stunden Fortschritt')
+      : tile(String(Math.floor(st.vodSeconds / 60)), 'Minuten Fortschritt'));
     tiles.appendChild(tile(String(st.finished), 'Zu Ende gesehen'));
     tiles.appendChild(tile(String(st.streak), 'Tage am Stück'));
     tiles.appendChild(tile(String(st.channels), 'Verschiedene Sender'));
@@ -1796,7 +1846,7 @@
     el.content.appendChild(element('div', 'detail-meta', st.count + ' Einträge im Verlauf'));
     if (st.longest) {
       el.content.appendChild(element('div', 'detail-meta',
-        'Weitester Fortschritt: ' + st.longest + ' (' + durationText(st.longestSeconds) + ')'));
+        'Am weitesten gesehen: ' + st.longest + ' (' + durationText(st.longestSeconds) + ')'));
     }
   }
 
@@ -1871,6 +1921,21 @@
    * `art` ist 'm' für Filme oder 's' für Serien.
    */
   /** Laufenden Kategorieabruf verwerfen und zur Kategorienliste zurueck. */
+  /**
+   * Einen laufenden Vollbild-Ladevorgang abbrechen (Serie, Archiv).
+   *
+   * `state.ladeAbbruch` haelt die laufende Anfrage; wer sie setzt, ist dafuer
+   * verantwortlich, sie in seinem Rueckruf wieder zu leeren.
+   */
+  function ladenAbbrechen() {
+    var a = state.ladeAbbruch;
+    state.ladeAbbruch = null;
+    state.loading = false;
+    state.loadingStep = null;
+    if (a) { try { a.abort(); } catch (e) {} }
+    ansichtZurueck();
+  }
+
   function katalogAbbrechen() {
     katalogLauf++;              // laufende Antwort wird dadurch verworfen
     if (katalogAnfrage) {
@@ -1912,9 +1977,8 @@
       if (err || !json) {
         katalogFehler[katalogSchluessel(art, katID)] = true;
         render();
-        toast('Die Kategorie „' + katName + '“ kam nicht an' +
-          (err ? ' (' + err.message + ')' : '') +
-          '. Prüfe die Internetverbindung und versuch es noch einmal.', 8000);
+        toast('„' + katName + '“ kam nicht an' +
+          (err ? ': ' + err.message : '') + '. Versuch es noch einmal.', 8000);
         return;
       }
       var items;
@@ -1970,10 +2034,6 @@
     }
 
     el.content.appendChild(element('div', 'section-title', kategorieUeberschrift(art, kategorien.length, alle)));
-    el.content.appendChild(element('div', 'detail-meta',
-      'Wähle eine Kategorie – sie wird dann geladen. So bleibt der Speicher ' +
-      'des Fernsehers frei für die Wiedergabe.'));
-
     var box = element('div', 'katliste');
     // Die Liste immer anlegen, auch leer: Das Suchfeld tauscht nur sie aus und
     // fiele sonst auf einen vollen Seitenaufbau zurueck.
@@ -2013,7 +2073,34 @@
     return m ? m[0].toUpperCase() : '•';
   }
 
+  /**
+   * Kurznamen fuer eine Kategorienliste – aber nur, wo sie eindeutig bleiben.
+   *
+   * `titelKurz` nimmt die Qualitaetsangabe heraus, und genau die war bei
+   * manchen Rubriken das einzige Unterscheidungsmerkmal: Aus
+   * „NETFLIX MOVIES ⁴ᴷ ³⁸⁴⁰ᴾ ᴰᵒˡᵇʸ ⱽᶦˢᶦᵒⁿ" und „NETFLIX MOVIES DOLBY AUDIO"
+   * wurden zwei Zeilen „NETFLIX MOVIES" untereinander. Gegen die echten Daten
+   * gezaehlt betraf das 21 von 299 Film- und 63 von 626 Live-Kategorien.
+   *
+   * Deshalb wird erst gezaehlt und dann entschieden: Wo ein Kurzname mehrfach
+   * entstuende, behalten ALLE Betroffenen ihren vollen Namen.
+   */
+  function kategorieNamen(kategorien) {
+    var zaehler = Object.create(null), i, kurz;
+    for (i = 0; i < kategorien.length; i++) {
+      kurz = Core.titelKurz(kategorien[i].name);
+      zaehler[kurz] = (zaehler[kurz] || 0) + 1;
+    }
+    var namen = Object.create(null);
+    for (i = 0; i < kategorien.length; i++) {
+      kurz = Core.titelKurz(kategorien[i].name);
+      namen[kategorien[i].name] = zaehler[kurz] > 1 ? kategorien[i].name : kurz;
+    }
+    return namen;
+  }
+
   function renderKategorieChunk(box, art, kategorien, from, count, onWahl) {
+    var namen = kategorieNamen(kategorien);
     for (var i = from; i < kategorien.length && i < from + count; i++) {
       (function (kat) {
         var row = element('div', 'channel focusable');
@@ -2021,9 +2108,13 @@
         row.setAttribute('data-fkey', 'kat:' + art + ':' + kat.id);
         row.appendChild(element('div', 'logo initiale', initialeVon(kat.name)));
         var info = element('div', 'info');
-        info.appendChild(element('div', 'name', Core.titelKurz(kat.name)));
-        var geladen = !!state.katalogCache[katalogSchluessel(art, kat.id)];
-        info.appendChild(element('div', 'sub', geladen ? 'geladen' : 'noch nicht geladen'));
+        info.appendChild(element('div', 'name', namen[kat.name] || kat.name));
+        /*
+         * Frueher stand hier „geladen" bzw. „noch nicht geladen" – auf JEDER
+         * der 299 Zeilen. Beide Zustaende fuehren zur exakt gleichen Geste
+         * (OK druecken); der Text aenderte am Handeln nichts und wiederholte
+         * sich 299-mal.
+         */
         row.appendChild(info);
         row.onclick = function () { onWahl(kat); };
         box.appendChild(row);
@@ -2058,6 +2149,21 @@
         state.loadingStep || 'Bibliothek wird geladen …'));
       el.content.appendChild(element('div', 'loading-sub',
         'Große Playlisten brauchen einen Moment.'));
+      /*
+       * Ein Ausweg, sonst ist das hier eine Falle: Der Vollbild-Spinner
+       * enthaelt KEIN fokussierbares Element, und die Zurueck-Taste aendert
+       * nur `state.view` – der Spinner blieb stehen, weil `state.loading`
+       * weiter wahr war. Ein Pruefer sass so eine halbe Minute vor „Archiv
+       * wird geladen …", waehrend die Anfrage laengst gescheitert war; die
+       * Fehlermeldung erschien erst, als er aufgab.
+       *
+       * Die Kategorienliste macht das seit jeher richtig; hier fehlte es.
+       */
+      if (state.ladeAbbruch) {
+        var abbruch = button('Abbrechen', function () { ladenAbbrechen(); }, true, 'ladeabbruch');
+        abbruch.setAttribute('data-erstziel', '1');
+        el.content.appendChild(abbruch);
+      }
       return;
     }
     if (state.gate) { renderGate(); setTimeout(focusFirst, 0); return; }
@@ -2349,9 +2455,8 @@
         (state.vodKategorien.length || state.serienKategorien.length)) {
       el.content.appendChild(element('div', 'section-title', 'Filme und Serien'));
       el.content.appendChild(element('div', 'detail-meta',
-        state.vodKategorien.length + ' Film- und ' + state.serienKategorien.length +
-        ' Serienkategorien stehen bereit. Sie werden einzeln geladen, damit der ' +
-        'Fernseher nicht den ganzen Katalog im Speicher halten muss.'));
+        state.vodKategorien.length + ' Filmkategorien und ' +
+        state.serienKategorien.length + ' Serienkategorien stehen bereit.'));
       var einstieg = element('div', 'detail-actions');
       einstieg.appendChild(button('Zu den Filmen', function () {
         state.tab = 'movies'; state.view = null; render();
@@ -2413,7 +2518,7 @@
     }
     if (from + count < list.length) {
       var rest = list.length - from - count;
-      var mehr = button('Weitere ' + Math.min(count, rest) + ' anzeigen', function () {
+      var mehr = button('Weitere ' + Math.min(count, rest) + ' Titel', function () {
         grid.removeChild(mehr);
         var ersteNeue = grid.childNodes.length;
         renderGridChunk(grid, list, from + count, count, onSelect);
@@ -2702,7 +2807,7 @@
       el.content.appendChild(element('div', 'loading-text',
         '„' + state.katalogLaedt + '“ wird geladen …'));
       el.content.appendChild(element('div', 'loading-sub',
-        'Die Kategorie kommt direkt vom Anbieter.'));
+        'Das dauert nur einen Moment.'));
       var abbr = button('Abbrechen', function () { katalogAbbrechen(); }, true, 'katabbruch');
       abbr.setAttribute('data-erstziel', '1');
       var box = element('div', 'detail-actions');
@@ -2746,7 +2851,7 @@
       }
       katalogLaden(art, wahl.id, wahl.name, function () { render(); });
       return renderEmpty('„' + wahl.name + '“ wird geladen …',
-        'Einen Moment – die Kategorie kommt direkt vom Panel.');
+        'Das dauert nur einen Moment.');
     }
     var zurueck = button('◀ Alle Kategorien', function () {
       // Fokus auf die Kategorie vorbelegen, aus der wir kommen – bei 299
@@ -3015,7 +3120,7 @@
     if (canResume) {
       var weiter = button('▶ Weiter ab ' + durationText(resume.position), function () {
         var u1 = streamUrlOf(m);
-        if (!u1) return toast('Für diesen Titel liegt keine Abspieladresse vor.', 6000);
+        if (!u1) return toast('Dieser Titel lässt sich gerade nicht starten. Öffne seine Kategorie noch einmal.', 6000);
         playItem(m.title, u1, m.group, 'movie', m.id, resume.position, null,
           { image: m.posterURL, group: m.group, ext: m.ext });
       });
@@ -3023,7 +3128,7 @@
       actions.appendChild(weiter);
       actions.appendChild(button('Von vorn', function () {
         var u2 = streamUrlOf(m);
-        if (!u2) return toast('Für diesen Titel liegt keine Abspieladresse vor.', 6000);
+        if (!u2) return toast('Dieser Titel lässt sich gerade nicht starten. Öffne seine Kategorie noch einmal.', 6000);
         playItem(m.title, u2, m.group, 'movie', m.id, 0, null,
           { image: m.posterURL, group: m.group, ext: m.ext });
       }, true));
@@ -3032,7 +3137,7 @@
         // Vorher oeffnete sich der Player mit leerer Adresse und meldete dann
         // „Stream laesst sich nicht abspielen" – die falsche Diagnose.
         var u = streamUrlOf(m);
-        if (!u) return toast('Für diesen Titel liegt keine Abspieladresse vor.', 6000);
+        if (!u) return toast('Dieser Titel lässt sich gerade nicht starten. Öffne seine Kategorie noch einmal.', 6000);
         playItem(m.title, u, m.group, 'movie', m.id, 0, null,
           { image: m.posterURL, group: m.group, ext: m.ext });
       });
@@ -3104,10 +3209,11 @@
     state.loading = true;
     // Sonst stand hier „Bibliothek wird geladen …“ – der Nutzer hat aber
     // eine Serie angetippt, nicht die Bibliothek neu geladen.
-    state.loadingStep = 'Folgen werden geladen …'; render();
+    state.loadingStep = 'Folgen werden geladen …';
     var url = Core.xtreamApi(state.source.host, state.source.user, state.source.pass,
       'get_series_info', { series_id: series.xtreamSeriesID });
-    httpGetJson(url, function (err, json) {
+    state.ladeAbbruch = httpGetJson(url, function (err, json) {
+      state.ladeAbbruch = null;
       state.loading = false;
       state.loadingStep = null;
       if (!err && json) {
@@ -3123,11 +3229,14 @@
         }
       } else {
         // Bei einem Fehler NICHT merken – ein zweiter Versuch soll moeglich sein.
-        toast('Die Folgen kamen nicht an' + (err ? ' (' + err.message + ')' : '') +
-          '. Prüfe die Internetverbindung und öffne die Serie noch einmal.', 7000);
+        toast('Die Folgen kamen nicht an' + (err ? ': ' + err.message : '') +
+          '. Öffne die Serie noch einmal.', 7000);
       }
       render();
     });
+    // Erst JETZT zeichnen: Vorher stand `state.ladeAbbruch` noch nicht, und der
+    // Abbrechen-Knopf waere nicht erschienen.
+    render();
   }
 
   /**
@@ -3288,7 +3397,7 @@
       if (!eps.length) {
         el.content.appendChild(element('div', 'detail-meta',
           'Für „' + fq + '“ ist in dieser Serie nichts dabei. Gesucht wird im ' +
-          'Folgentitel und in der Nummer – „S02E05" oder „2x05" gehen auch.'));
+          'Folgentitel und in der Nummer – „S02E05“ oder „2x05“ gehen auch.'));
         return;
       }
     } else {
@@ -3874,6 +3983,12 @@
     xhr.open('GET', url, true);
     xhr.timeout = 120000;
     xhr.onload = function () {
+      /*
+       * Status pruefen – `httpGet` tut das, dieser eigene XHR tat es nicht.
+       * Ein 403 oder 500 mit HTML-Rumpf lief bisher durch den Scanner; dass
+       * dabei meist nichts herauskam, war Glueck, kein Schutz.
+       */
+      if (xhr.status < 200 || xhr.status >= 300) { schief(); return; }
       var eintraege = null;
       var laenge = (xhr.responseText || '').length;
       try {
@@ -3891,12 +4006,18 @@
       var zuKlein = eintraege && eintraege.length < 10 && laenge > 1000000;
       fertig(!eintraege || !eintraege.length || zuKlein ? null : eintraege);
     };
-    var schief = function () {
+    /*
+     * Funktionsdeklaration statt `var schief = function`: `xhr.onload` weiter
+     * oben ruft sie, und das traegt beim Ausdruck nur, WEIL `onload` erst
+     * spaeter laeuft. Die Deklaration wird gehoben, damit steht die Abhaengigkeit
+     * nicht mehr auf der Reihenfolge der Zeilen.
+     */
+    function schief() {
       state.indexLaedt = null;
       toast('Titelverzeichnis konnte nicht geladen werden. Prüfe die ' +
         'Internetverbindung und versuch es noch einmal.', 8000);
       if (state.view && state.view.type === 'search') render();
-    };
+    }
     xhr.onerror = schief;
     xhr.ontimeout = schief;
     // Ohne onabort bliebe `indexLaedt` haengen, wenn die Plattform die Anfrage
@@ -4015,7 +4136,7 @@
     if (!ch || !(ch.archiveDays > 0)) return null;
     // Der Rueckblick laeuft ueber Xtream-Pfade; eine M3U-Playlist kennt ihn nicht.
     if (!state.source || state.source.kind !== 'xtream' || !ch.sid) return null;
-    var b = element('button', 'archiv-knopf focusable', 'Archiv');
+    var b = element('button', 'archiv-knopf focusable', 'Zurückschauen');
     b.setAttribute('data-fkey', 'archiv:' + ch.id);
     b.onclick = function (ev) {
       // Ohne das Stoppen loeste der Klick zusaetzlich die Zeile aus und der
@@ -4033,16 +4154,16 @@
 
     state.loading = true;
     state.loadingStep = 'Archiv wird geladen …';
-    render();
     var src = state.source;
     var url = Core.xtreamApi(src.host, src.user, src.pass, 'get_simple_data_table',
       { stream_id: ch.sid });
-    httpGetJson(url, function (err, json) {
+    state.ladeAbbruch = httpGetJson(url, function (err, json) {
+      state.ladeAbbruch = null;
       state.loading = false;
       state.loadingStep = null;
       if (err || !json) {
-        toast('Das Archiv kam nicht an' + (err ? ' (' + err.message + ')' : '') +
-          '. Prüfe die Internetverbindung und versuch es noch einmal.', 8000);
+        toast('Zurückschauen hat nicht geklappt' + (err ? ': ' + err.message : '') +
+          '. Versuch es noch einmal.', 8000);
         render();
         return;
       }
@@ -4057,6 +4178,8 @@
       state.archiv[ch.id] = liste;
       render();
     }, 30000);
+    // Erst JETZT zeichnen – sonst faehlt der Abbrechen-Knopf.
+    render();
   }
 
   function renderArchiv(ch) {
@@ -4157,7 +4280,7 @@
     });
     if (!withEpg.length) {
       return renderEmpty('Kein Programmführer',
-        'Diese Quelle liefert keine EPG-Daten (XMLTV).');
+        'Zu dieser Quelle gibt es kein Fernsehprogramm. Die Sender laufen trotzdem.');
     }
     /*
      * Der Deckel bei 100 Sendern war eine Sackgasse: Bei 1.800 Sendern mit
@@ -4217,7 +4340,7 @@
     el.content.appendChild(box);
     if (withEpg.length > grenze) {
       var rest = withEpg.length - grenze;
-      el.content.appendChild(button('Weitere ' + Math.min(rest, 100) + ' Sender anzeigen',
+      el.content.appendChild(button('Weitere ' + Math.min(rest, 100) + ' Sender',
         function () {
           state.guideLimit = grenze + 100;
           /*
@@ -4354,7 +4477,7 @@
       if (!treffer) {
         hinweis.textContent = q
           ? 'Keine Kategorie enthält „' + feld.value + '“.'
-          : 'Keine Kategorien geladen.';
+          : 'Es gibt noch keine Kategorien.';
       } else if (treffer > gezeigt) {
         hinweis.textContent = gezeigt + ' von ' + treffer +
           ' Treffern gezeigt – Suche eingrenzen, um die übrigen zu erreichen.';
@@ -4393,14 +4516,14 @@
       ? ('Aktuelle Quelle: ' + maskSource(src))
       : 'Keine Quelle eingerichtet.'));
 
-    // Downloads sind auf diesem Gerät nicht möglich – das gehört gesagt,
-    // statt einen Knopf anzubieten, der nichts tut.
-    panel.appendChild(element('div', 'section-title', 'Downloads'));
-    panel.appendChild(element('p', null,
-      'Auf dem Fernseher nicht verfügbar: LG lässt den Download-Dienst nur für ' +
-      'signierte Apps zu (geprüft – der Aufruf wird abgelehnt), und der Browser-' +
-      'Speicher reicht für Filme ohnehin nicht. Am Fernseher, der ohnehin am Netz ' +
-      'hängt, bringt Offline auch wenig – auf iPhone und Quest gibt es die Funktion.'));
+    /*
+     * Dass es keine Downloads gibt, gehoert gesagt – aber in einem Satz und
+     * nicht als Erstes. Vorher standen hier vier Zeilen Rechtfertigung samt
+     * Verweis auf iPhone und Quest: das Erste, was man in den Einstellungen
+     * las, war die Begruendung fuer eine fehlende Funktion.
+     */
+    panel.appendChild(element('p', 'detail-meta',
+      'Downloads gibt es auf dem Fernseher nicht.'));
 
     // Modell und Firmware nennen, damit bei einer Rückfrage klar ist, worauf
     // die App läuft (LG unterscheidet sich je Baujahr erheblich).
@@ -4463,7 +4586,7 @@
     // Die Merkliste war die einzige Struktur ohne Deckelung UND ohne Notausgang.
     actions.appendChild(button('Meine Liste löschen (dieses Profil)', function () {
       state.watchlist = {}; saveScoped('watchlist', state.watchlist);
-      toast('Meine Liste geleert.');
+      toast('Meine Liste gelöscht.');
       render();
     }, true));
     panel.appendChild(actions);
@@ -4511,7 +4634,7 @@
       var newActions = element('div', 'actions');
       newActions.appendChild(button('Anlegen', function () {
         var v = (nameInput.value || '').replace(/^\s+|\s+$/g, '');
-        if (!v) return toast('Bitte einen Namen eingeben.');
+        if (!v) return toast('Gib einen Namen ein.');
         var id = addProfile(v);
         state.view.addProfile = false;
         switchProfile(id);
@@ -4695,14 +4818,14 @@
         'Mit PIN lassen sich Kategorien sperren – sie verschwinden dann app-weit, ' +
         'bis hier entsperrt wird.'));
       var pinPanel = element('div', 'panel');
-      pinPanel.appendChild(element('label', null, 'Neuer PIN (4–8 Ziffern)'));
+      pinPanel.appendChild(element('label', null, 'Neue PIN (4–8 Ziffern)'));
       var pinInput = element('input', 'focusable');
       pinInput.type = 'password';
       pinPanel.appendChild(pinInput);
       var pinActions = element('div', 'actions');
       pinActions.appendChild(button('PIN setzen', function () {
         var v = (pinInput.value || '').replace(/[^0-9]/g, '');
-        if (v.length < 4) return toast('Bitte 4 bis 8 Ziffern eingeben.');
+        if (v.length < 4) return toast('Gib 4 bis 8 Ziffern ein.');
         state.settings.pin = v;
         state.unlocked = true;
         /*
@@ -4733,7 +4856,7 @@
           applyLanguageFilter();
           render();
         } else {
-          toast('Falscher PIN.');
+          toast('Falsche PIN – versuch es noch einmal.');
           check.value = '';
         }
       }));
@@ -4787,8 +4910,8 @@
     if (state.authFehler) {
       panel.appendChild(element('p', 'fehler', state.authIstNetz
         ? state.authFehler + '. Prüfe die Internetverbindung des Fernsehers.'
-        : 'Anmeldung fehlgeschlagen: ' + state.authFehler + '. Bitte Zugangsdaten ' +
-          'prüfen – bei abgelaufenem Zugang nennt der Anbieter neue.'));
+        : state.authFehler + '. Prüfe Benutzer und Passwort – bei abgelaufenem ' +
+          'Zugang nennt dir der Anbieter neue.'));
       // Bei einem Netzaussetzer stimmen die gespeicherten Daten ja – dann soll
       // ein Knopf genuegen statt alles neu einzutippen.
       if (state.authIstNetz && saved) {
@@ -4828,12 +4951,12 @@
     actions.appendChild(button('Xtream laden', function () {
       eingabeMerken();
       var cleanHost = Core.sanitizedHost(host.value);
-      if (!cleanHost) return toast('Bitte eine gültige Server-Adresse eingeben.');
+      if (!cleanHost) return toast('Gib eine gültige Server-Adresse ein.');
       loadXtreamSource(cleanHost, user.value, pass.value);
     }));
     actions.appendChild(button('M3U laden', function () {
       eingabeMerken();
-      if (!m3u.value) return toast('Bitte eine M3U-Adresse eingeben.');
+      if (!m3u.value) return toast('Gib eine M3U-Adresse ein.');
       loadM3USource(m3u.value);
     }, true));
     panel.appendChild(actions);
@@ -4987,6 +5110,15 @@
       state.filmIndex = null;
       state.serienIndex = null;
       state.indexLaedt = false;
+      /*
+       * Das Archiv gehoert zur alten Quelle. Sein Schluessel ist `xtream|l|123`
+       * – diesen Kennungsraum teilen sich ALLE Xtream-Panels. Ohne das Leeren
+       * zeigte das Archiv von Sender 123 auf dem neuen Panel ohne jeden Abruf
+       * die Sendungen des alten, und die Timeshift-Adresse wurde gegen den
+       * neuen Host gebaut: schwarzer Bildschirm oder eine voellig andere
+       * Sendung. Genau dafuer traegt der Verlauf laengst einen Quellenabdruck.
+       */
+      state.archiv = {};
       state.katalogCache = {};
       state.katalogReihe = [];
       state.katWahl = { movies: null, series: null };
@@ -5034,7 +5166,13 @@
       // Jeden Teilbereich einzeln benennen: Früher wurden Fehler bei Filmen und
       // Serien verschluckt – der Nutzer sah eine leere Seite und hielt seinen
       // Anbieter für kaputt.
-      problems.push(bereich + ' (' + (err && err.message ? err.message : 'unbekannt') + ')');
+      /*
+       * Nur den Bereich nennen, nicht den Fehler je Bereich: „Sender
+       * (Server nicht erreichbar), Filmkategorien (Server nicht erreichbar)"
+       * ist eine Protokollzeile auf dem Fernsehbildschirm. Welche Bereiche
+       * fehlen, ist die Information.
+       */
+      problems.push(bereich);
     }
 
     function finish() {
@@ -5068,6 +5206,8 @@
       state.filmIndex = null;
       state.serienIndex = null;
       state.indexLaedt = false;
+      // Archiv gehoert ebenfalls zur alten Quelle (siehe M3U-Zweig).
+      state.archiv = {};
       try {
         afterLoad(lib);
       } catch (parseError) {
@@ -5075,8 +5215,8 @@
         return toast('Bibliothek konnte nicht aufgebaut werden: ' + parseError.message, 9000);
       }
       if (problems.length) {
-        toast('Teilweise geladen – nicht abrufbar: ' + problems.join(', ') +
-          '. In den Einstellungen „Neu laden“ versuchen.', 9000);
+        toast('Nicht alles kam an: ' + problems.join(', ') +
+          '. Geh in den Einstellungen auf „Neu laden“.', 9000);
       }
       loadEpg();
     }
@@ -5086,11 +5226,25 @@
     function step1auth() {
       httpGetJson(Core.xtreamApi(host, user, pass, null), function (err, json) {
         /*
-         * Netzfehler und abgelehnte Anmeldung sind zweierlei: Ein WLAN-Aussetzer
-         * warf den Nutzer bisher mit „Anmeldung fehlgeschlagen" zurueck ins
-         * Formular, obwohl die Zugangsdaten stimmten.
+         * Netzfehler und abgelehnte Anmeldung sind zweierlei — aber die
+         * Unterscheidung hing bisher nur daran, DASS ein Fehler kam, nicht
+         * woran er lag. Ein abgelaufener Zugang antwortet mit 401 oder 403,
+         * und die App zeigte darauf „Prüfe die Internetverbindung": Sie zeigte
+         * auf ein Netz, das in Ordnung ist, waehrend der Nutzer beim Anbieter
+         * haette anrufen muessen.
+         *
+         * `status` kommt aus `httpGet`: 0 heisst nicht erreichbar oder zu
+         * langsam, alles andere ist eine echte Antwort des Servers.
          */
-        if (err) { netzFehler = err; authError = err; }
+        if (err) {
+          if (err.status === 401 || err.status === 403) {
+            authError = new Error('Der Anbieter hat den Zugang abgelehnt');
+          } else if (err.status) {
+            authError = err;             // Server antwortet, aber nicht brauchbar
+          } else {
+            netzFehler = err; authError = err;
+          }
+        }
         else if (json && json.user_info && Number(json.user_info.auth) === 0) {
           authError = new Error('Benutzer oder Passwort falsch');
         }
@@ -5185,8 +5339,22 @@
     }, 60000);
   }
 
+  /*
+   * Es darf immer nur EIN XMLTV-Abruf laufen. `loadEpg` wird an vier Stellen
+   * gerufen, unter anderem jedes Mal, wenn die Senderliste WAECHST – also beim
+   * Abwaehlen einer Sprache, bei „Alle wieder zeigen" und beim Entsperren der
+   * Kindersicherung. Drei Klicks in den Einstellungen hintereinander liessen
+   * bisher drei 64-MB-Downloads parallel laufen; `responseText` liegt in V8 als
+   * UTF-16 vor, das waeren rund 380 MB allein an Antworttext.
+   */
+  var epgAnfrage = null;
+
   function loadEpg() {
     if (!state.source) return;
+    if (epgAnfrage) {
+      try { epgAnfrage.abort(); } catch (e) {}
+      epgAnfrage = null;
+    }
     epgGeholt = Date.now();
     var url;
     if (state.source.kind === 'xtream') {
@@ -5197,7 +5365,8 @@
       url = state.epgURL;
       if (!url) return;
     }
-    httpGet(url, function (err, text) {
+    epgAnfrage = httpGet(url, function (err, text) {
+      epgAnfrage = null;
       if (err || !text) return;          // EPG ist Zugabe – ein Fehler darf nichts kippen
       try {
         // Nur Sendungen der tatsächlich vorhandenen Kanäle behalten: Die Datei
@@ -5552,6 +5721,15 @@
     }
 
     if (code === 461 || code === 8) {
+      /*
+       * Laeuft gerade ein Vollbild-Ladevorgang, bricht Zurueck IHN ab und nicht
+       * die Ansicht: Sonst aenderte sich nur `state.view`, `state.loading` blieb
+       * wahr, und der Spinner stand unveraendert weiter da – der Druck sah aus,
+       * als waere er verschluckt worden.
+       */
+      if (state.loading && state.ladeAbbruch) {
+        ladenAbbrechen(); e.preventDefault(); return;
+      }
       if (state.view) {
         /*
          * Offene Teilbereiche zuerst schliessen: Vorher warf Zurueck die
@@ -5944,7 +6122,12 @@
       try {
         state.loading = false;
         state.loadingStep = null;
-        toast('Es ist ein Fehler aufgetreten: ' + message, 9000);
+        /*
+         * `message` ist die rohe englische JS-Fehlermeldung – aus drei Metern
+         * weder lesbar noch verwertbar. Was hilft, ist der Neustart-Hinweis.
+         */
+        toast('Da ist etwas schiefgegangen. Der Bildschirm ist neu aufgebaut – ' +
+          'wenn es bleibt, starte die App neu.', 9000);
         /*
          * NEU ZEICHNEN, nicht nur den Zustand zuruecksetzen. Bricht ein Fehler
          * die Ladekette ab, blieb der Vollbild-Spinner stehen – der Zustand
