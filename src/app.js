@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.21.0';
+  var APP_VERSION = '1.21.1';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -3093,7 +3093,8 @@
     if (!series.xtreamSeriesID && state.source && state.source.kind === 'xtream') {
       series.xtreamSeriesID = nummerAusId(series.id);
     }
-    state.view = { type: 'series', item: series, season: null, zurueck: vorherigeAnsicht() };
+    state.view = { type: 'series', item: series, season: null, folgenSuche: '',
+      zurueck: vorherigeAnsicht() };
     // `_folgenGeholt` statt nur der Laenge: Eine Serie, fuer die das Panel
     // nichts liefert, loeste sonst bei JEDEM Oeffnen einen neuen Abruf samt
     // Vollbild-Spinner aus.
@@ -3144,6 +3145,76 @@
     return p.position;
   }
 
+  /**
+   * Suchfeld ueber der Folgenliste. Nur bei Serien, die es brauchen.
+   *
+   * Dasselbe Muster wie im Programmfuehrer: `oninput` und `onkeyup` haengen
+   * beide dran, weil manche TV-Tastaturen kein `input` liefern, und der
+   * Merker verhindert, dass beide zusammen doppelt zeichnen.
+   */
+  function folgenSuchfeld(s) {
+    var wrap = element('div', 'search-wrap');
+    var input = document.createElement('input');
+    input.className = 'search focusable';
+    input.type = 'text';
+    input.placeholder = 'Folge suchen – Titel oder S02E05 …';
+    input.value = state.view.folgenSuche || '';
+    input.setAttribute('data-fkey', 'folgensuche');
+    var letzter = null;
+    input.oninput = function () {
+      if (input.value === letzter) return;
+      letzter = input.value;
+      state.view.folgenSuche = input.value;
+      focusWuenschen('folgensuche');
+      render();
+    };
+    input.onkeyup = input.oninput;
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  /**
+   * Folgen filtern – ueber Titel UND Folgennummer.
+   *
+   * Der Titel laeuft ueber `Core.trefferRang`, damit hier dieselben
+   * Faehigkeiten gelten wie in der grossen Suche: „koenig" findet „König",
+   * „teil 2" findet „Teil II", und mehrere Woerter duerfen in beliebiger
+   * Reihenfolge stehen.
+   *
+   * Die Reihenfolge bleibt bewusst die natuerliche (Staffel, dann Folge) statt
+   * nach Rang sortiert: Das hier ist ein Filter, kein Ranglistenproblem — wer
+   * „borowski" ueber dreissig Staffeln sucht, will sie chronologisch sehen.
+   */
+  function folgenFiltern(episoden, anfrage, serienTitel) {
+    var q = anfrage.toLowerCase();
+    var teile = Core.sucheZerlegen(anfrage);
+    var nummer = Core.folgenNummer(anfrage);
+    var out = [];
+    for (var i = 0; i < episoden.length; i++) {
+      var ep = episoden[i];
+      if (nummer) {
+        // Reine Nummernanfrage: nur die Nummer zaehlt, sonst faende „s02"
+        // jeden Titel mit „s" und „0".
+        if (nummer.staffel !== null && ep.season !== nummer.staffel) continue;
+        if (nummer.folge !== null && ep.episode !== nummer.folge) continue;
+        out.push(ep);
+        continue;
+      }
+      /*
+       * Den ANGEZEIGTEN Titel durchsuchen, nicht den rohen. Sonst faende
+       * „simpsons" alle 779 Folgen – der Anbieter schreibt den Seriennamen in
+       * jeden einzelnen Folgentitel.
+       */
+      if (Core.trefferRang(Core.folgenTitel(ep.title, serienTitel), anfrage, teile) > 0) {
+        out.push(ep); continue;
+      }
+      // „S02E05" als Teil einer laengeren Anfrage trifft auch die Beschriftung.
+      var label = 's' + two(ep.season) + 'e' + two(ep.episode);
+      if (label.indexOf(q) >= 0) out.push(ep);
+    }
+    return out;
+  }
+
   function renderSeriesDetail(s) {
     el.content.appendChild(backButton());
     el.content.appendChild(detailHeader(s.title, s.backdropURL || s.posterURL,
@@ -3175,7 +3246,24 @@
     seasons.sort(function (a, b) { return a - b; });
     var current = state.view.season !== null ? state.view.season : seasons[0];
 
-    if (seasons.length > 1) {
+    /*
+     * Folgenfilter – der einzige Weg, eine bestimmte Folge zu finden.
+     *
+     * Ueber die globale Suche geht das nicht: `series.episodes` entsteht
+     * ausschliesslich aus `get_series_info`, einem Aufruf JE SERIE. Ein
+     * Folgenverzeichnis waeren auf diesem Panel 31.602 HTTP-Anfragen — das ist
+     * nicht knapp zu teuer, sondern unmoeglich. Hier sind die Folgen dagegen
+     * schon geladen, und bei einer Serie mit 200 Folgen ist das Suchen genau
+     * hier die eigentliche Not.
+     *
+     * Der Filter greift ueber ALLE Staffeln, nicht nur die gewaehlte — sonst
+     * muesste man raten, in welcher Staffel die gesuchte Folge liegt.
+     */
+    var fq = (state.view.folgenSuche || '').replace(/^\s+|\s+$/g, '');
+    var filtert = fq.length >= 2;
+    if (s.episodes.length > 8) el.content.appendChild(folgenSuchfeld(s));
+
+    if (seasons.length > 1 && !filtert) {
       var chips = element('div', 'chips');
       for (var j = 0; j < seasons.length; j++) {
         (function (n) {
@@ -3190,7 +3278,22 @@
     }
 
     var box = document.createElement('div');
-    var eps = s.episodes.filter(function (e) { return e.season === current; });
+    var eps;
+    if (filtert) {
+      eps = folgenFiltern(s.episodes, fq, s.title);
+      el.content.appendChild(element('div', 'section-title',
+        eps.length
+          ? eps.length + ' von ' + s.episodes.length + ' Folgen'
+          : 'Keine Folge passt'));
+      if (!eps.length) {
+        el.content.appendChild(element('div', 'detail-meta',
+          'Für „' + fq + '“ ist in dieser Serie nichts dabei. Gesucht wird im ' +
+          'Folgentitel und in der Nummer – „S02E05" oder „2x05" gehen auch.'));
+        return;
+      }
+    } else {
+      eps = s.episodes.filter(function (e) { return e.season === current; });
+    }
     for (var k = 0; k < eps.length; k++) {
       (function (ep) {
         var row = element('div', 'channel focusable');
@@ -3207,7 +3310,9 @@
         row.appendChild(thumb);
         var info = element('div', 'info');
         var label = 'S' + two(ep.season) + 'E' + two(ep.episode);
-        info.appendChild(element('div', 'name', label + '   ' + ep.title));
+        // Serienname und Nummer raus – beides steht in dieser Zeile schon.
+        info.appendChild(element('div', 'name',
+          label + '   ' + Core.folgenTitel(ep.title, s.title)));
         var p = state.progress[ep.id];
         if (ep.durationSeconds) info.appendChild(element('div', 'sub', durationText(ep.durationSeconds)));
         if (p && p.duration > 0) info.appendChild(progressBar(p.position / p.duration));

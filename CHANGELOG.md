@@ -1,5 +1,48 @@
 # Änderungen
 
+## 1.21.1 — Folgen finden
+
+Die globale Suche kann Folgen nicht erfassen, und das liegt nicht an ihr:
+`series.episodes` entsteht ausschließlich aus `get_series_info`, einem Aufruf
+**je Serie**. Ein Folgenverzeichnis wären auf diesem Panel 31.602 einzelne
+HTTP-Anfragen — das ist nicht knapp zu teuer, sondern unmöglich.
+
+In der Serienansicht sind die Folgen dagegen längst geladen. Genau dort sitzt
+jetzt ein Filterfeld, und genau dort war auch die Not: „Die Simpsons" hat auf
+diesem Panel **779 Folgen in 36 Staffeln**. Ohne Filter heißt das, sich durch
+36 Staffel-Chips zu hangeln und zu raten.
+
+Der Filter greift über **alle** Staffeln, nicht nur die gewählte — sonst müsste
+man wissen, wo die gesuchte Folge liegt. Am Gerät gemessen:
+
+| Eingabe | Ergebnis |
+|---|---|
+| `weihnacht` | 5 von 779 — Staffel 1, 15 und 28 |
+| `homer` | 58 von 779 |
+| `s30e12` | genau 1 |
+| `e01` | 34 — jede erste Folge |
+
+Titel laufen über denselben Rang wie die große Suche, also mit allem, was dort
+neu ist: „koenigin" findet „Königin", „teil 2" findet „Teil II". Nummern werden
+getrennt behandelt (`S02E05`, `s2e5`, `2x05`, `s3`, `e12`), weil „s02" als Text
+sonst jeden Titel mit einem „s" und einer „0" fände.
+
+Sortiert bleibt chronologisch, nicht nach Rang: Das hier ist ein Filter, kein
+Ranglistenproblem — wer „borowski" über dreißig Staffeln sucht, will sie der
+Reihe nach sehen.
+
+**Folgentitel zeigen nur noch den Folgentitel.** Der Anbieter schreibt den
+ganzen Kontext in jede Zeile; Folge 1 heißt dort wörtlich „DE - Die Simpsons
+(US) - S01E01 - Es weihnachtet schwer" — und die Nummer steht in der Zeile
+ohnehin schon links davor. Jetzt: „S01E01 · Es weihnachtet schwer". Bei 779
+Folgen ist das der Unterschied zwischen einer lesbaren Liste und 779 mal
+derselben Zeichenkette.
+
+Gesucht wird im **angezeigten** Titel, nicht im rohen: Sonst fände „simpsons"
+alle 779 Folgen. Gemessen sind es jetzt 26 — die, die den Namen wirklich im
+eigenen Titel tragen.
+
+
 ## 1.21.0 — Die Suche erfasst jetzt alles
 
 Der Anlass war eine Beschwerde: Die Suche fand Filme nicht. Nachgerechnet an

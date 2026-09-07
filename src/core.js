@@ -836,6 +836,63 @@
    * Staffelnummer steht teils nur im Schlüssel. Strikte Auswertung verwarf
    * früher ALLE Folgen, sobald ein Element aus der Reihe tanzte.
    */
+  /**
+   * Folgentitel fuer die Anzeige: Serienname und Folgennummer heraus.
+   *
+   * Panels schreiben den ganzen Kontext in jeden Folgentitel. Auf diesem hier
+   * heisst Folge 1 der Simpsons woertlich
+   *
+   *     „DE - Die Simpsons (US) - S01E01 - Es weihnachtet schwer"
+   *
+   * und die Zeile zeigt die Nummer ohnehin schon links davor. Uebrig bleiben
+   * soll das Einzige, was die Folge unterscheidet: ihr Titel.
+   *
+   * Bei einer Serie mit 779 Folgen ist das der Unterschied zwischen einer
+   * lesbaren Liste und 779 mal derselben Zeichenkette.
+   */
+  function folgenTitel(titel, serienTitel) {
+    var t = String(titel || '');
+    if (!t) return t;
+    var kurz = t;
+
+    // Serienname heraus, sofern er wirklich drinsteht (Gross-/Kleinschreibung egal).
+    var st = String(serienTitel || '');
+    if (st.length > 2) {
+      var i = kurz.toLowerCase().indexOf(st.toLowerCase());
+      if (i >= 0) kurz = kurz.slice(0, i) + kurz.slice(i + st.length);
+    }
+    // Folgennummer heraus – sie steht links in der Zeile.
+    kurz = kurz.replace(/\bS\d{1,3}\s*E\d{1,4}\b/ig, '');
+    kurz = kurz.replace(/\s{2,}/g, ' ')
+               .replace(/^[\s|:·\-–—]+/, '')
+               .replace(/[\s|:·\-–—]+$/, '');
+
+    // Bleibt nichts Brauchbares uebrig, lieber das Original als eine leere Zeile.
+    return kurz.length >= 2 ? kurz : t;
+  }
+
+  /**
+   * Staffel- und Folgennummer aus einer Sucheingabe lesen.
+   *
+   * Erkennt `s02e05`, `s2e5`, `2x05`, `s02` und `e05`. Liefert `null`, wenn die
+   * Eingabe keine Nummernangabe ist — dann wird ueber den Titel gesucht.
+   *
+   * Warum getrennt und nicht einfach im Titel mitgesucht: „s02" faende sonst
+   * jeden Folgentitel, der ein „s" und eine „0" enthaelt.
+   */
+  function folgenNummer(anfrage) {
+    var t = String(anfrage || '').toLowerCase().replace(/\s+/g, '');
+    var m = /^s(\d{1,3})e(\d{1,4})$/.exec(t);
+    if (m) return { staffel: Number(m[1]), folge: Number(m[2]) };
+    m = /^(\d{1,3})x(\d{1,4})$/.exec(t);
+    if (m) return { staffel: Number(m[1]), folge: Number(m[2]) };
+    m = /^s(\d{1,3})$/.exec(t);
+    if (m) return { staffel: Number(m[1]), folge: null };
+    m = /^e(\d{1,4})$/.exec(t);
+    if (m) return { staffel: null, folge: Number(m[1]) };
+    return null;
+  }
+
   function parseEpisodes(info, host, user, pass, seriesID) {
     var out = [];
     var perSeason = {};
@@ -1711,6 +1768,8 @@
     sucheZerlegen: sucheZerlegen,
     parseSeriesList: parseSeriesList,
     parseEpisodes: parseEpisodes,
+    folgenNummer: folgenNummer,
+    folgenTitel: folgenTitel,
     detectLanguage: detectLanguage,
     filterByLanguage: filterByLanguage,
     SPRACH_MODI: ['grosszuegig', 'ausgewogen', 'streng'],
