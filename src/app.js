@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.22.0';
+  var APP_VERSION = '1.22.1';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -4341,10 +4341,20 @@
     el.content.appendChild(guideSuchfeld());
 
     var grenze = state.guideLimit || 100;
+    /*
+     * Die Uhrzeit gehoert hierher. Der ganze Programmfuehrer dreht sich um
+     * „jetzt" – „laeuft gerade", Fortschrittsbalken, „danach 20:00" – und
+     * nannte an keiner Stelle, welche Zeit er meint. Bei einem Pruefer stand
+     * der Fernseher auf London-Zeit; der komplette Guide lief damit eine
+     * Stunde nach, und nichts auf dem Bildschirm haette ihn das merken lassen.
+     * Die falsche Zeitzone ist eine Geraeteeinstellung, aber die App soll die
+     * Chance geben, sie zu bemerken.
+     */
+    var jetztText = timeText(new Date());
     el.content.appendChild(element('div', 'section-title',
-      withEpg.length > grenze
+      (withEpg.length > grenze
         ? 'Jetzt und danach · ' + grenze + ' von ' + withEpg.length + ' Sendern'
-        : 'Jetzt und danach · ' + withEpg.length + ' Sender'));
+        : 'Jetzt und danach · ' + withEpg.length + ' Sender') + '   ·   ' + jetztText));
     if (!withEpg.length) {
       el.content.appendChild(element('div', 'detail-meta',
         'Kein Sender mit Programm passt zu „' + state.guideSuche + '“.'));
@@ -5448,6 +5458,19 @@
   }
 
   function playItem(title, url, subtitle, kind, id, resumeSeconds, context, meta) {
+    /*
+     * Die Pruefung gehoert HIERHER, nicht in jeden Aufrufer. Die Filmseite hat
+     * sie an drei Stellen, die Folgenliste und `playChannel` hatten sie nicht:
+     * Dort oeffnete sich der Player mit leerer Adresse und meldete dann
+     * „laesst sich auf dem Fernseher nicht abspielen" – die falsche Diagnose
+     * fuer einen Eintrag, dessen Adresse sich schlicht nicht bauen liess
+     * (M3U-Quelle, fremder Quellenabdruck, fehlende Stream-Nummer).
+     */
+    if (!url) {
+      toast('Dieser Titel lässt sich gerade nicht starten. Öffne seine ' +
+        'Kategorie noch einmal.', 6000);
+      return;
+    }
     player.meta = meta || {};
     player.open = true;
     player.kind = kind;
@@ -5463,7 +5486,7 @@
     player.lastSaved = undefined;
     el.playerTitle.textContent = title;
     el.playerSub.textContent = subtitle || '';
-    el.player.className = 'open';
+    el.player.className = 'open';   // ohne `pausiert` – neuer Titel, neuer Zustand
     el.scrubFill.style.width = '0%';
     el.times.textContent = kind === 'live' ? 'Live' : '';
     /*
@@ -5481,8 +5504,13 @@
      */
     var hint = document.getElementById('player-hint');
     if (hint) {
+      /*
+       * Bei Live wechseln AUCH ▲ und ▼ den Sender (siehe onKey) – und heben
+       * dabei die Pause auf. Der Hinweis nannte nur ◀ ▶, wer die Leiste wieder
+       * einblenden wollte, landete unversehens auf einem anderen Sender.
+       */
       hint.textContent = kind === 'live'
-        ? 'OK = Pause · ◀ ▶ = Sender wechseln · Zurück = schließen'
+        ? 'OK = Pause · ◀ ▶ ▲ ▼ = Sender wechseln · Zurück = schließen'
         : (kind === 'catchup'
           ? 'OK = Pause · ◀ ▶ = 2 Min. spulen · Zurück = schließen'
           : 'OK = Pause · ◀ ▶ = 10 s spulen · Zurück = schließen');
@@ -6138,6 +6166,24 @@
       if (player.pufferTimer) { clearTimeout(player.pufferTimer); player.pufferTimer = null; }
       if (el.playerSub.textContent === 'Wird geladen …') el.playerSub.textContent = player.subtitle || '';
     });
+    /*
+     * Pausenanzeige ueber die EREIGNISSE schalten, nicht im Tastenhandler:
+     * Auch ein Senderwechsel oder ein Pufferabbruch aendert den Zustand, und
+     * die Anzeige soll dann nicht luegen.
+     */
+    function pauseAnzeige(an) {
+      var k = el.player.className.replace(/\s*\bpausiert\b/g, '');
+      el.player.className = an ? (k + ' pausiert') : k;
+      var hint = document.getElementById('player-hint');
+      if (!hint) return;
+      // Der Hinweis sagte weiterhin „OK = Pause", waehrend das Bild stand.
+      hint.textContent = hint.textContent.replace(
+        an ? 'OK = Pause' : 'OK = Fortsetzen', an ? 'OK = Fortsetzen' : 'OK = Pause');
+    }
+    el.video.addEventListener('pause', function () {
+      if (player.open) pauseAnzeige(true);
+    });
+    el.video.addEventListener('play', function () { pauseAnzeige(false); });
     el.video.addEventListener('ended', function () {
       if (!playNextEpisode()) closePlayer();
     });

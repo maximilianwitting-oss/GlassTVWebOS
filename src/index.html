@@ -23,6 +23,12 @@
 
   <div id="player">
     <video id="video" preload="none"></video>
+    <!--
+      Pausenanzeige. Sie liegt NEBEN dem Video, nicht darueber: webOS zeichnet
+      Video haeufig in einer Hardware-Ebene, und eine Deckkraft auf einem
+      Vorfahren des <video> kann diese Ebene aushebeln.
+    -->
+    <div id="player-pause" aria-hidden="true"><span></span><span></span></div>
     <div id="player-chrome">
       <div>
         <div id="player-title"></div>

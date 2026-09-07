@@ -1,5 +1,43 @@
 # Änderungen
 
+## 1.22.1 — Pausenanzeige, Uhrzeit, und eine Prüfung an der richtigen Stelle
+
+**Pausiertes Fernsehen sagte nicht, dass es pausiert ist.** Nach dem Druck auf
+OK hielt das Bild an, die Bedienleiste blendete nach vier Sekunden aus — und
+danach stand nichts mehr auf dem Schirm. Solange sie noch da war, sagte der
+Hinweis weiterhin „OK = Pause" statt „Fortsetzen".
+
+Jetzt steht eine Pausenanzeige mittig im Bild und bleibt stehen. Sie liegt
+bewusst **neben** dem Video, nicht darüber: webOS zeichnet Video häufig in einer
+Hardware-Ebene, und eine Deckkraft auf einem Vorfahren des `<video>` kann diese
+Ebene aushebeln. Geschaltet wird sie über die `play`/`pause`-Ereignisse, nicht
+im Tastenhandler — auch ein Senderwechsel oder ein Pufferabbruch ändert den
+Zustand, und die Anzeige soll dann nicht lügen.
+
+Dazu: Bei Live wechseln **auch ▲ und ▼** den Sender und heben die Pause dabei
+auf. Der Hinweis nannte nur ◀ ▶; wer die Leiste wieder einblenden wollte,
+landete unversehens auf einem anderen Sender.
+
+**Der Programmführer zeigt jetzt die Uhrzeit.** Er dreht sich vollständig um
+„jetzt" — „läuft gerade", Fortschrittsbalken, „danach 20:00" — und nannte an
+keiner Stelle, welche Zeit er meint. Bei einem Prüfer stand der Fernseher auf
+London-Zeit; der komplette Guide lief eine Stunde nach, und nichts auf dem
+Bildschirm hätte ihn das merken lassen. Die falsche Zeitzone ist eine
+Geräteeinstellung, aber die App soll die Chance geben, sie zu bemerken.
+
+**Die Prüfung auf eine fehlende Abspieladresse sitzt jetzt in `playItem`.** Die
+Filmseite hatte sie an drei Stellen, die Folgenliste und `playChannel` nicht:
+Dort öffnete sich der Player mit leerer Adresse und meldete anschließend „lässt
+sich auf dem Fernseher nicht abspielen" — die falsche Diagnose für einen
+Eintrag, dessen Adresse sich schlicht nicht bauen ließ. An einer Stelle geprüft
+kann sie nirgends mehr vergessen werden.
+
+**Nicht geändert:** Der Gruppenfilter in Live TV „überlebt" laut Feldbericht den
+Neustart. Er wird nicht gespeichert — die Beobachtung stammt vom
+webOS-Wiedereintritt (`handlesRelaunch: true`), bei dem dieselbe Sitzung
+weiterläuft. Die Auswahl dort zu verwerfen wäre schlechter, nicht besser.
+
+
 ## 1.22.0 — Ein Zeichen kostete 128 MB
 
 Die Startspitze lag bei 404 MB, während der Dauerzustand bei 158 liegt. Eine

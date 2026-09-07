@@ -1176,6 +1176,35 @@ input.focusable.focusable.focusable:active,
  */
 
 
+/*
+ * Pausenanzeige. Sie muss STEHEN BLEIBEN, auch wenn die Bedienleiste nach vier
+ * Sekunden ausblendet: Vorher stand nach dem Pausieren gar nichts mehr auf dem
+ * Bild, und der Hinweis sagte weiterhin „OK = Pause" statt „Fortsetzen".
+ *
+ * Zwei Balken statt eines Zeichens – aus drei Metern eindeutig und unabhaengig
+ * von der Schriftart.
+ */
+#player-pause {
+  position: absolute; top: 50%; left: 50%;
+  width: 96px; height: 112px;
+  margin: -56px 0 0 -48px;
+  z-index: 2; opacity: 0; pointer-events: none;
+  -webkit-transition: opacity var(--dauer-aus) var(--kurve-aus);
+          transition: opacity var(--dauer-aus) var(--kurve-aus);
+}
+#player.pausiert #player-pause {
+  opacity: 1;
+  -webkit-transition: opacity var(--dauer-ein) var(--kurve-ein);
+          transition: opacity var(--dauer-ein) var(--kurve-ein);
+}
+#player-pause span {
+  display: inline-block; width: 32px; height: 112px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+}
+#player-pause span + span { margin-left: 32px; }
+
 /* Einblenden schneller als Ausblenden – siehe #player-chrome. */
 #player-chrome:not(.hidden) {
   -webkit-transition-duration: 120ms; transition-duration: 120ms;
