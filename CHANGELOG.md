@@ -1,5 +1,30 @@
 # Änderungen
 
+## 1.23.4 — Nachgemessen: 404 → 268 MB Spitze, 157 → 120 MB Dauerzustand
+
+Die Messung zu 1.23.0 stand noch aus, weil der Fernseher aus war. Jetzt liegt
+sie vor, zwei Läufe über 64 Sekunden:
+
+| | zu Beginn dieser Sitzung | jetzt |
+|---|---|---|
+| Gesamtspitze | 404 MB | **268 MB** |
+| Startphase mit EPG | 404 MB | 246 MB |
+| Dauerzustand | 157 MB | **117–124 MB** |
+| mit laufendem Video | — | 115 MB |
+
+Der Dauerzustand ist stärker gefallen als erwartet — nicht nur durch die
+Byte-Scanner, sondern auch durch das Bildleck aus 1.21.2: `lazyPruefen` verwarf
+entladene Bilder über `if (!img.parentNode)`, und diese Bedingung wurde nie
+wahr, weil das `<img>` Kind seines `.poster`-Div bleibt.
+
+Mit laufendem Video sind es 115 MB. Der Videodecoder liegt in einem eigenen
+Prozess und zählt nicht in den Renderer.
+
+`requiredMemory` geht deshalb von 384 auf **320** — 268 MB Spitze plus rund ein
+Fünftel Reserve. Zu Beginn der Sitzung stand dort 320 bei einer tatsächlichen
+Spitze von 404; die Zusage stimmt jetzt zum ersten Mal.
+
+
 ## 1.23.3 — Der Fehlerzweig lief nie weiter
 
 Beim Prüfen des eigenen Umbaus gefunden, und der Fehler ist meiner:

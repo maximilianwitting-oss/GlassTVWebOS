@@ -11,7 +11,7 @@ läuft. Technisch ist die App einreichbereit:
 |---|---|
 | `appinfo.json` vollständig | ja – id, version, vendor, icons, bgColor, resolution |
 | Icons in LG-Größen | 80×80 und 130×130, geprüft |
-| `requiredMemory` | **384 MB**. Auf dem OLED77C9PLA gemessen, alle 2 s: Startphase mit EPG **232 MB** (vorher 404), Gesamtspitze **332 MB** beim Aufbau des Titelverzeichnisses, Dauerzustand **158 MB**. Die Startspitze fiel um 171 MB, seit XMLTV als Bytes statt als Zeichenkette gelesen wird — siehe CHANGELOG 1.22.0. |
+| `requiredMemory` | **320 MB**. Auf dem OLED77C9PLA gemessen, zwei Läufe über 64 s: Gesamtspitze **268 MB**, Dauerzustand **117–124 MB**, mit laufendem Video **115 MB** (der Decoder liegt in einem eigenen Prozess). Zum Vergleich der Ausgangspunkt dieser Sitzung: Spitze 404 MB, Dauerzustand 157 MB. |
 | Beenden über Zurück-Taste | ja, `webOS.platformBack()` – LG prüft das |
 | Vollständig mit Fernbedienung bedienbar | ja, inkl. Magic-Remote-Zeiger |
 | Auflösung 1920×1080 | ja |
