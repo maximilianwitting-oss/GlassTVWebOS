@@ -1,5 +1,42 @@
 # Änderungen
 
+## 1.23.3 — Der Fehlerzweig lief nie weiter
+
+Beim Prüfen des eigenen Umbaus gefunden, und der Fehler ist meiner:
+`holeVerzeichnis` rief seinen Rückruf im Fehlerfall **gar nicht**. `schief()`
+setzte nur `state.indexLaedt = null` und zeigte eine Meldung — die Kette lief
+nie weiter. Drei Folgen, alle am Quelltext belegt:
+
+1. Scheiterte der **Film**abruf, startete der Serienabruf nie. Der Nutzer verlor
+   beide Verzeichnisse, obwohl nur eines nicht ankam.
+2. `state.indexFehler` wird erst im innersten Rückruf gesetzt — die ehrliche
+   Meldung „Filme konnten nicht erfasst werden", die ich in 1.21.0 ausdrücklich
+   dafür gebaut hatte, erschien also genau dann nicht, wenn sie gebraucht wurde.
+3. Damit blieb `verzeichnisFaellig()` wahr, und `renderSearch` stieß den Aufbau
+   bei **jedem** Neuzeichnen erneut an. Auf einem Panel, das nicht antwortet,
+   ist das dieselbe Anfragenlawine, die dieses Projekt schon einmal hatte
+   (1.074 Anfragen in 1,5 Sekunden).
+
+`fertig` läuft jetzt genau einmal, auch bei Fehler, Abbruch und Zeitüberschreitung.
+Der eigene Toast dort entfällt — er sagte „Prüfe die Internetverbindung" und
+widersprach damit der Meldung am Ende der Kette, weil der Grund oft ein anderer
+ist.
+
+**Die M3U-Prüfung war zu streng.** `/^\s*(#EXTM3U|#EXTINF)/` lehnte Playlisten
+ab, die eine Kommentarzeile vor `#EXTM3U` tragen. Gesucht wird jetzt im Anfang
+der Antwort statt nur am Zeilenanfang; BOM und Leerzeilen waren ohnehin
+abgedeckt, HTML-Sperrseiten und JSON-Fehlermeldungen fallen weiterhin durch.
+
+**Geprüft und in Ordnung befunden** (damit die Abdeckung einschätzbar bleibt):
+`byteStringEnde` mit einem Backslash als letztem Byte wirft nicht;
+`byteFeld` verwechselt `stream_icon` nicht mit `stream_id` und `category_name`
+nicht mit `category_id`, und ein Feldname im *Wert* eines anderen Feldes
+(`"Film \"stream_id\": 99"`) führt nicht in die Irre — der Sucher setzt auf
+einem nicht maskierten Anführungszeichen auf, deshalb kann er das gar nicht.
+Beide Aufrufstellen des Programmführers gehen über `guideOeffnen`, und der
+Rückweg über `vorherigeAnsicht` behält die Nachladeposition bewusst.
+
+
 ## 1.23.2 — Ersatzpaare, gefunden im eigenen Randfalltest
 
 Nach dem Umbau der Scanner auf Bytes habe ich beide gegen Randfälle geprüft,

@@ -14,7 +14,7 @@
   'use strict';
 
   var Core = window.GlassTVCore;
-  var APP_VERSION = '1.23.2';
+  var APP_VERSION = '1.23.3';
 
   // ---------------------------------------------------------- Zustand ----
 
@@ -4049,6 +4049,30 @@
      */
     xhr.responseType = 'arraybuffer';
     xhr.timeout = 120000;
+
+    /*
+     * `fertig` genau EINMAL rufen, auch im Fehlerfall.
+     *
+     * Vorher setzte der Fehlerzweig nur `state.indexLaedt = null` und toastete
+     * – die Kette lief nie weiter. Drei Folgen, alle am Quelltext belegt:
+     *
+     * 1. Scheiterte der FILM-Abruf, startete der Serienabruf nie. Der Nutzer
+     *    verlor beide Verzeichnisse, obwohl nur eines nicht ankam.
+     * 2. `state.indexFehler` wird erst im innersten Rueckruf gesetzt – die
+     *    ehrliche Meldung „Filme konnten nicht erfasst werden" erschien also
+     *    genau dann nicht, wenn sie gebraucht wurde.
+     * 3. Damit blieb `verzeichnisFaellig()` wahr, und `renderSearch` stiess den
+     *    Aufbau bei JEDEM Neuzeichnen erneut an. Auf einem Panel, das nicht
+     *    antwortet, ist das dieselbe Anfragenlawine, die dieses Projekt schon
+     *    einmal hatte (1.074 Anfragen in 1,5 s).
+     */
+    var erledigt = false;
+    function abschluss(eintraege) {
+      if (erledigt) return;
+      erledigt = true;
+      fertig(eintraege);
+    }
+
     xhr.onload = function () {
       /*
        * Status pruefen – `httpGet` tut das, dieser eigene XHR tat es nicht.
@@ -4073,7 +4097,7 @@
        * stillschweigend nutzlos.
        */
       var zuKlein = eintraege && eintraege.length < 10 && laenge > 1000000;
-      fertig(!eintraege || !eintraege.length || zuKlein ? null : eintraege);
+      abschluss(!eintraege || !eintraege.length || zuKlein ? null : eintraege);
     };
     /*
      * Funktionsdeklaration statt `var schief = function`: `xhr.onload` weiter
@@ -4081,12 +4105,12 @@
      * spaeter laeuft. Die Deklaration wird gehoben, damit steht die Abhaengigkeit
      * nicht mehr auf der Reihenfolge der Zeilen.
      */
-    function schief() {
-      state.indexLaedt = null;
-      toast('Titelverzeichnis konnte nicht geladen werden. Prüfe die ' +
-        'Internetverbindung und versuch es noch einmal.', 8000);
-      if (state.view && state.view.type === 'search') render();
-    }
+    /*
+     * Kein eigener Toast mehr: Die Kette meldet am Ende, welcher Teil fehlt –
+     * und die alte Meldung hier („Prüfe die Internetverbindung") widersprach
+     * ihr, weil der Grund oft ein anderer ist.
+     */
+    function schief() { abschluss(null); }
     xhr.onerror = schief;
     xhr.ontimeout = schief;
     // Ohne onabort bliebe `indexLaedt` haengen, wenn die Plattform die Anfrage
@@ -5221,7 +5245,15 @@
        * Bibliothek, die zudem als Quelle GESPEICHERT wurde und beim naechsten
        * Start wieder geladen wird.
        */
-      if (!/^\s*(#EXTM3U|#EXTINF)/.test(text)) {
+      /*
+       * Im ANFANG suchen, nicht nur am Zeilenanfang: Manche Playlisten tragen
+       * eine Kommentarzeile vor `#EXTM3U`, und die hatte die strengere Fassung
+       * abgelehnt. Ein Byte-Vorspann (BOM) und Leerzeilen sind ohnehin
+       * abgedeckt. Zum Abweisen genuegt der Anfang – eine HTML-Sperrseite hat
+       * dort nichts, was nach Playlist aussieht.
+       */
+      if (text.slice(0, 2000).indexOf('#EXTM3U') < 0 &&
+          text.slice(0, 2000).indexOf('#EXTINF') < 0) {
         render();
         return toast('Das sieht nicht nach einer Playlist aus. Prüfe die Adresse – ' +
           'erwartet wird eine M3U-Datei.', 9000);
